@@ -4,7 +4,9 @@ Each file in tests/fixtures/golden holds what the prototype's process() returned
 scenario of golden_cases.py (its Result JSON without the clock) and the requests it sent,
 in order. The files are frozen reference output: they were produced once, by the earlier
 research prototype, and are not regenerated from this repository. The new process() must
-return the same and send the same, to the byte of every prompt and attached PDF.
+return the same and send the same, to the byte of every prompt and attached PDF. Each
+scenario runs twice: plain, and served - with the arguments the API passes to process()
+(the local work on a lane of its own).
 
 The texts of the photo_ and scan_ issues were reworded when the flow was ported (full
 sentences); the files carry the new wording, with the numbers the prototype produced. A
@@ -27,6 +29,7 @@ Left out of the comparison, on purpose:
 import asyncio
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -114,22 +117,28 @@ def comparable_requests(bodies: list[dict[str, Any]], exact_files: bool) -> list
     return out
 
 
-def run_case(case: Case) -> tuple[bytes, Result, Model]:
+def run_case(case: Case, served: bool = False) -> tuple[bytes, Result, Model]:
+    """process() on the scenario. served: called the way the API calls it, with the local
+    work on a lane of its own."""
     data, mime = case.data()
     model = case.model()
 
     async def go() -> Result:
         async with httpx.AsyncClient(transport=httpx.MockTransport(model)) as client:
-            return await pipeline.process(data, mime, client, Config(**case.config))
+            if not served:
+                return await pipeline.process(data, mime, client, Config(**case.config))
+            with ThreadPoolExecutor(1) as lane:
+                return await pipeline.process(data, mime, client, Config(**case.config), lane=lane)
 
     return data, asyncio.run(go()), model
 
 
+@pytest.mark.parametrize("served", [False, True], ids=["plain", "served"])
 @pytest.mark.parametrize("case", CASES, ids=[c.name for c in CASES])
-def test_flow_output_is_the_one_pinned(case: Case) -> None:
+def test_flow_output_is_the_one_pinned(case: Case, served: bool) -> None:
     golden = json.loads((GOLDEN / f"{case.name}.json").read_text())
     assert golden["config"] == case.config
-    data, res, model = run_case(case)
+    data, res, model = run_case(case, served)
     exact_files = sha256(data) == golden["input_sha256"]
 
     differences = compare(

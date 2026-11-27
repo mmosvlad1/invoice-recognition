@@ -33,6 +33,9 @@ class PageResult:
     # "model": read by the model; "layout": rows found by code (attempts, if any, are the
     # witness or a re-read by the model that was not kept).
     method: str = "model"
+    # Text at the top of the page that belongs to the last line item of the previous page;
+    # "" when not asked for.
+    carry_in: str = ""
 
 
 @dataclass
@@ -56,8 +59,15 @@ class Result:
     )  # how the layout road went: status, reason, ...
     layout_attempts: list[Attempt] = field(default_factory=list)
     # What changed no number and is not an issue. Every note has "kind", "page" and "text".
-    # Rows the layout did not explain, and text the layout parser joined across a page
-    # break, also have "row" (the text line on the page).
+    #   rows the layout did not explain, and text the layout parser joined across a page
+    #   break: + "row" (the text line on the page)
+    #   a tail returned in "carry_in" (source: "carry_in"), "page" = the page it is printed on:
+    #     joined_across_pages  - appended to the description of Result.lines[line]:
+    #                            + "line", "line_no", "sku", "to_page"
+    #     carry_already_joined - that row was read by code and already ends with it;
+    #                            nothing was appended: the same keys
+    #     carry_without_owner  - no row to append it to; nothing was changed: + "reason"
+    #     carry_join_failed    - the join broke ("page" is None); nothing was changed
     notes: list[JSONObject] = field(default_factory=list)
 
     @property

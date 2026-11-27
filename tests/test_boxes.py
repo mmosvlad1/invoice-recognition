@@ -2,7 +2,9 @@
 it. pdfium is the witness (tests/boxes_help.py), never the formulas under test."""
 
 import functools
+import json
 import logging
+from dataclasses import dataclass
 from itertools import islice
 
 import pytest
@@ -10,10 +12,11 @@ import pytest
 from invoice_recognition.recognition import boxes
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition.boxes import PageFrame
+from invoice_recognition.shapes import JSONObject
 
-from boxes_help import SHIFT, VARIANTS, Oracle, variant
+from boxes_help import CROP, SHIFT, VARIANTS, Oracle, layout_of, variant
 from drawn import scan
-from samples import INVOICES
+from samples import FIXTURES, INVOICES, WITH_LAYOUT, saved_layout
 
 
 @functools.cache
@@ -175,3 +178,183 @@ def test_a_scan_has_frames() -> None:
         (595.0, 842.0, 0),
         (595.0, 842.0, 0),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Line items found by code
+# --------------------------------------------------------------------------- #
+
+LAYOUT_VARIANTS = ("orig", "rot90", "rot180", "rot270", "shift", "crop")
+
+
+@dataclass
+class ByCode:
+    data: bytes
+    layout: lay.Layout
+    parsed: lay.Parsed
+    frames: list[PageFrame | None]
+    boxes: list[boxes.LineBoxes | None]
+
+
+@functools.cache
+def by_code(name: str, kind: str = "orig") -> ByCode:
+    """The layout road on a sample displayed as `kind`, with the recorded layout answer."""
+    data = pdf(name, kind)
+    pages = lay.text_lines(data)
+    layout = layout_of(data, pages, saved_layout(name))
+    parsed = lay.parse_document(pages, layout)
+    frames = boxes.page_frames(data)
+    return ByCode(data, layout, parsed, frames, boxes.from_layout(parsed, layout, frames))
+
+
+def _value_of(text: str, key: str, layout: lay.Layout) -> object:
+    """A value as the layout parser reads it from the text of its cell."""
+    if key in ("sku", "unit"):
+        return text
+    if key == "line_no":
+        return int(text.rstrip("."))
+    return layout.number(text.replace("%", "").strip() if key == "tax_rate" else text)
+
+
+def _inside(inner: boxes.Rect, outer: boxes.Rect) -> bool:
+    return (
+        outer[0] <= inner[0]
+        and outer[1] <= inner[1]
+        and inner[2] <= outer[2]
+        and inner[3] <= outer[3]
+    )
+
+
+@pytest.mark.parametrize("name", WITH_LAYOUT)
+@pytest.mark.parametrize("kind", LAYOUT_VARIANTS)
+def test_every_cell_found_by_code_frames_its_own_text(name: str, kind: str) -> None:
+    got = by_code(name, kind)
+    lines = got.parsed.lines
+    assert len(got.boxes) == len(lines) > 10
+    framed = 0
+    last = {item["page"]: i for i, item in enumerate(lines)}
+    with Oracle(got.data) as oracle:
+        for i, (item, found) in enumerate(zip(lines, got.boxes)):
+            if found is None:
+                assert kind == "crop"  # only a crop box hides whole lines
+                continue
+            assert tuple(found) == boxes.BOX_KEYS and found["row"] is not None
+            frame = got.frames[item["page"] - 1]
+            assert frame is not None
+            for key, rect in found.items():
+                if rect is None:
+                    continue
+                x0, y0, x1, y1 = rect
+                assert 0 <= x0 < x1 <= frame.width and 0 <= y0 < y1 <= frame.height
+                assert _inside(rect, found["row"]), (key, item)
+                if key == "row":
+                    continue
+                text = oracle.text_under(item["page"], rect)
+                if key == "description":
+                    # all of it, wrapped rows included; the last line of a page may go on
+                    # at the top of the next one
+                    whole = " ".join(item["description"].split())
+                    assert whole == text or (i == last[item["page"]] and whole.startswith(text))
+                else:
+                    assert _value_of(text, key, got.layout) == item[key], (key, text, item)
+                framed += 1
+            if kind != "crop":
+                for key in ("sku", "description", "quantity", "unit_price", "amount"):
+                    if item[key] not in (None, ""):
+                        assert found[key] is not None, (key, item)
+    assert framed > 5 * len(lines) or kind == "crop"
+
+
+@pytest.mark.parametrize("name", ["s_dense", "m_grouped"])
+def test_crop_box_hides_values_outside_the_displayed_page(name: str) -> None:
+    """On the crop variant the page is the original one moved by the cut, and a value that
+    is not wholly on what is left of it is not framed. Lines whose rows are all cut off
+    have no boxes."""
+    whole, cropped = by_code(name), by_code(name, "crop")
+    left, _, _, top = CROP
+    assert cropped.parsed.lines == whole.parsed.lines
+    hidden = partly = 0
+    for page_item, a, b in zip(whole.parsed.lines, whole.boxes, cropped.boxes):
+        frame = cropped.frames[page_item["page"] - 1]
+        assert a is not None and frame is not None
+        page = (0.0, 0.0, frame.width, frame.height)
+        moved = {
+            k: None if r is None else (r[0] - left, r[1] - top, r[2] - left, r[3] - top)
+            for k, r in a.items()
+        }
+        row = moved["row"]
+        assert row is not None
+        if row[2] <= 0 or row[3] <= 0 or row[0] >= frame.width or row[1] >= frame.height:
+            assert b is None
+            hidden += 1
+            continue
+        assert b is not None
+        for key, r in moved.items():
+            if key == "row" or r is None:
+                assert key == "row" or b[key] is None
+                continue
+            near_edge = any(abs(v) < 0.6 for v in (r[0], r[1], r[2] - page[2], r[3] - page[3]))
+            if near_edge:
+                continue
+            if _inside(r, page):
+                assert b[key] == pytest.approx(r, abs=1e-6), (key, page_item)
+            else:
+                assert b[key] is None, (key, page_item)
+                partly += 1
+    assert hidden and partly
+
+
+def test_tax_rate_printed_once_for_the_document_is_not_framed() -> None:
+    data = pdf("s_classic")
+    pages = lay.text_lines(data)
+    answer = saved_layout("s_classic") | {"tax": {"in_row": False, "document_rate": 20}}
+    layout = layout_of(data, pages, answer)
+    parsed = lay.parse_document(pages, layout)
+    found = boxes.from_layout(parsed, layout, boxes.page_frames(data))
+    assert all(item["tax_rate"] == 20 for item in parsed.lines)
+    assert all(b is not None and b["tax_rate"] is None and b["amount"] for b in found)
+
+
+def test_a_discount_row_has_its_amount_and_description_framed() -> None:
+    got = by_code("m_grouped")
+    marker = got.layout.discount_marker
+    assert marker
+    rows = [
+        (item, b)
+        for item, b in zip(got.parsed.lines, got.boxes)
+        if marker in item["description"].casefold()
+    ]
+    assert rows
+    for item, b in rows:
+        assert item["amount"] < 0
+        assert b is not None and b["amount"] is not None and b["description"] is not None
+
+
+def test_a_line_on_a_page_without_frame_has_no_boxes() -> None:
+    got = by_code("m_grouped")
+    frames: list[PageFrame | None] = [got.frames[0], None, *got.frames[2:]]
+    found = boxes.from_layout(got.parsed, got.layout, frames)
+    assert [b is None for b in found] == [item["page"] == 2 for item in got.parsed.lines]
+    assert boxes.from_layout(got.parsed, got.layout, []) == [None] * len(got.parsed.lines)
+
+
+SNAPSHOT = FIXTURES / "boxes" / "s_classic.layout.json"
+
+
+def _snapshot(name: str) -> list[JSONObject]:
+    got = by_code(name)
+    return [
+        {
+            "sku": item["sku"],
+            "page": item["page"],
+            "boxes": None
+            if b is None
+            else {k: None if r is None else list(r) for k, r in b.items()},
+        }
+        for item, b in zip(got.parsed.lines, got.boxes)
+    ]
+
+
+def test_boxes_of_s_classic_are_pinned() -> None:
+    """The rectangles of every line of s_classic, to the tenth of a point."""
+    assert _snapshot("s_classic") == json.loads(SNAPSHOT.read_text())

@@ -20,6 +20,7 @@ from pypdf.errors import FileNotDecryptedError
 
 from invoice_recognition.api import messages
 from invoice_recognition.api.problems import ApiError
+from invoice_recognition.recognition.config import MAX_IMAGE_PIXELS
 from invoice_recognition.recognition.pdf import page_count
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ _SIGNATURES: tuple[tuple[bytes, Kind, str, str], ...] = (
 class UploadLimits:
     max_file_bytes: int = 10 * MB
     max_pages: int = 50
-    max_image_pixels: int = 50_000_000
+    max_image_pixels: int = MAX_IMAGE_PIXELS
 
 
 @dataclass(frozen=True)

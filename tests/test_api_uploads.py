@@ -11,6 +11,7 @@ from pypdf import PdfReader, PdfWriter
 from invoice_recognition.api import messages
 from invoice_recognition.api.problems import ApiError
 from invoice_recognition.api.uploads import Upload, UploadLimits, inspect, sniff
+from invoice_recognition.recognition.config import MAX_IMAGE_PIXELS, Config
 
 import drawn
 from fakes import make_pdf
@@ -208,3 +209,7 @@ def test_the_pixel_limit_is_checked_before_the_image_is_decoded(size: tuple[int,
         "The image has more pixels than can be read; the limit is 50 million pixels. "
         "Save the image at a lower resolution."
     )
+
+
+def test_the_pixel_cap_of_an_image_is_the_flows_cap_for_a_page_image() -> None:
+    assert UploadLimits().max_image_pixels == MAX_IMAGE_PIXELS == Config().max_image_pixels

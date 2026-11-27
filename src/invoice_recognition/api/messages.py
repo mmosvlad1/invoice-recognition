@@ -108,15 +108,23 @@ def _pages(pages: list[int]) -> tuple[str, bool]:
     return f"pages {page_ranges(pages)}", True
 
 
-def scan_unreadable(blurred: list[int], blank: list[int]) -> str:
-    """Why no page of a scan was sent: the pages too blurred and the pages without text."""
-    if not blurred and not blank:
-        return JOB_ERRORS["scan_unreadable"]
-    if not blurred:
-        return "The scan has no text on any page."
-    what, many = _pages(blurred)
-    text = f"No page of the scan could be read: {what} {'are' if many else 'is'} too blurred"
+def scan_unreadable(
+    blurred: list[int], blank: list[int], too_large: list[int] | None = None
+) -> str:
+    """Why no page of a scan was sent: the pages too blurred, the pages without text and
+    the pages holding an image too large to open."""
+    too_large = too_large or []
+    if not blurred and not too_large:
+        return "The scan has no text on any page." if blank else JOB_ERRORS["scan_unreadable"]
+    why = []
+    if blurred:
+        what, many = _pages(blurred)
+        why.append(f"{what} {'are' if many else 'is'} too blurred")
+    if too_large:
+        what, many = _pages(too_large)
+        why.append(f"{what} {'hold images' if many else 'holds an image'} too large to open")
     if blank:
         what, many = _pages(blank)
-        text += f" and {what} {'have' if many else 'has'} no text"
-    return text + "."
+        why.append(f"{what} {'have' if many else 'has'} no text")
+    listed = why[0] if len(why) == 1 else f"{', '.join(why[:-1])} and {why[-1]}"
+    return f"No page of the scan could be read: {listed}."

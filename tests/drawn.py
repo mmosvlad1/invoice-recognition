@@ -6,6 +6,7 @@ the same inputs can be built wherever a reference run needs them.
 
 import io
 import time
+import zlib
 from typing import Any
 
 import cv2
@@ -134,3 +135,37 @@ def png(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
+
+
+def declared_image_scan(width: int, height: int) -> bytes:
+    """A one-page PDF whose page is covered by one gray image that DECLARES width x height
+    pixels but stores only a few compressed bytes. Reading its size costs nothing; decoding
+    it would allocate width x height bytes, which the tests never do. Written by hand: no
+    PDF library here would write an image without having its pixels."""
+    data = zlib.compress(bytes(1024))
+    content = b"q 595 0 0 842 0 0 cm /Im0 Do Q"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"
+        ),
+        b"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray "
+        b"/BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream"
+        % (width, height, len(data), data),
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+    ]
+    out = bytearray(b"%PDF-1.7\n")
+    offsets = []
+    for n, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (n, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % at for at in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)

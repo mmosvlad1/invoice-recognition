@@ -445,12 +445,25 @@ def _photo_reason(result: Result) -> str | None:
 
 
 def _scan_reason(result: Result) -> str:
-    """Which pages of a scan were too blurred and which had no text."""
+    """Which pages of a scan were too blurred, which held an image too large to open and
+    which had no text."""
     pages = result.quality.get("pages")
     verdicts = [p for p in pages if isinstance(p, dict)] if isinstance(pages, list) else []
-    blurred = [p["page"] for p in verdicts if p.get("verdict") == "reject"]
+
+    def too_large(p: JSONObject) -> bool:
+        reasons = p.get("reasons")
+        codes = (
+            [r.get("code") for r in reasons if isinstance(r, dict)]
+            if isinstance(reasons, list)
+            else []
+        )
+        return "too_large" in codes
+
+    rejected = [p for p in verdicts if p.get("verdict") == "reject"]
+    blurred = [p["page"] for p in rejected if not too_large(p)]
+    large = [p["page"] for p in rejected if too_large(p)]
     blank = [p["page"] for p in verdicts if p.get("verdict") == "empty"]
-    return messages.scan_unreadable(blurred, blank)
+    return messages.scan_unreadable(blurred, blank, large)
 
 
 def _all_failed(attempts: list[AttemptView]) -> bool:

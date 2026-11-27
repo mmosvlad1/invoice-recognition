@@ -143,6 +143,14 @@ def test_a_scan_with_nothing_worth_sending_names_its_pages(
     assert job_error("pdf", res) == JobError(code="scan_unreadable", message=message)
 
 
+def test_a_scan_whose_pages_are_too_large_to_open_says_so() -> None:
+    res = run(drawn.declared_image_scan(30000, 30000), "application/pdf", never)
+    assert job_error("pdf", res) == JobError(
+        code="scan_unreadable",
+        message="No page of the scan could be read: page 1 holds an image too large to open.",
+    )
+
+
 def test_every_request_failing_is_model_unavailable() -> None:
     res = failed(
         header_attempts=[attempt("HTTP 401"), attempt("HTTP 401")],

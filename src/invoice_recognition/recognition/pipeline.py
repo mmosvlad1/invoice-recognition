@@ -694,6 +694,16 @@ def _scan_issue(r: ql.Reason, page: int, lim: ql.ScanLimits) -> Issue:
     return Issue(f"scan_{r.code}", text, page=page, severity="error" if reject else "warning")
 
 
+def _too_large_issue(q: ql.TooLarge, page: int) -> Issue:
+    return Issue(
+        "scan_too_large",
+        f"The images of the page have {q.pixels:,} pixels, more than the {q.limit:,} that may "
+        "be opened. The page was not sent to the model.",
+        page=page,
+        severity="error",
+    )
+
+
 def _scan_quality(
     data: bytes, n: int, cfg: Config
 ) -> tuple[JSONObject, dict[int, str], dict[int, list[Issue]], list[JSONObject]]:
@@ -706,7 +716,7 @@ def _scan_quality(
         lim = ql.ScanLimits(
             **{k[5:]: v for k, v in asdict(cfg).items() if k.startswith("scan_") and k[5:] in names}
         )
-        measured = ql.measure_pdf_pages(data)
+        measured = ql.measure_pdf_pages(data, cfg.max_image_pixels)
         # The renderer and the splitter disagree about the pages: no verdict can be tied to
         # a page.
         if len(measured) != n:
@@ -722,6 +732,18 @@ def _scan_quality(
     issues: dict[int, list[Issue]] = {}
     notes: list[JSONObject] = []
     for p, q in enumerate(measured, start=1):
+        if isinstance(q, ql.TooLarge):  # opening it could exhaust the memory: not sent either
+            reason = ql.Reason(
+                "too_large",
+                "The page holds an image too large to open: the page was not read. "
+                "Save the scan at a lower resolution.",
+                "reject",
+                float(q.pixels),
+            )
+            pages.append({"page": p, "verdict": "reject", "reasons": [reason.to_json()]})
+            issues[p] = [_too_large_issue(q, p)]
+            skipped[p] = "reject"
+            continue
         if isinstance(q, str):  # not a page this check can judge: read the way it always was
             pages.append({"page": p, "verdict": "unchecked", "reasons": [], "note": q})
             continue

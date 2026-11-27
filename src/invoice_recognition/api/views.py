@@ -25,6 +25,7 @@ serialisation schema marks each as required.
 """
 
 import json
+import logging
 import math
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -36,6 +37,8 @@ from invoice_recognition.api import messages
 from invoice_recognition.recognition.checks import Issue, dec
 from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import JSONObject, Line
+
+logger = logging.getLogger(__name__)
 
 AS_READ = (
     'As read: usually a number or a string such as "8.200", or null when not read; '
@@ -405,3 +408,89 @@ def result_view(result: Result) -> ResultView:
         },
     }
     return ResultView.model_validate(view)
+
+
+# --------------------------------------------------------------------------- #
+# Why a job failed
+# --------------------------------------------------------------------------- #
+
+
+class JobError(_View):
+    """The one reason a job failed, for a person; part of a successful answer."""
+
+    code: str = Field(
+        description="photo_unreadable | scan_unreadable | unreadable_file | model_unavailable "
+        "| no_line_items | no_header | deadline_exceeded | internal_error."
+    )
+    message: str
+
+
+def _error(code: str, message: str | None = None) -> JobError:
+    # The flow's own message (a photo's reason) is text from the flow: made writable.
+    return JobError(code=code, message=_utf8(message or messages.JOB_ERRORS[code]))
+
+
+def _photo_reason(result: Result) -> str | None:
+    """The message for a person of the first reason the photo was rejected for."""
+    reasons = result.quality.get("reasons")
+    for reason in reasons if isinstance(reasons, list) else []:
+        if isinstance(reason, dict) and reason.get("severity") == "reject":
+            message = reason.get("message")
+            return message if isinstance(message, str) and message else None
+    return None
+
+
+def _scan_reason(result: Result) -> str:
+    """Which pages of a scan were too blurred and which had no text."""
+    pages = result.quality.get("pages")
+    verdicts = [p for p in pages if isinstance(p, dict)] if isinstance(pages, list) else []
+    blurred = [p["page"] for p in verdicts if p.get("verdict") == "reject"]
+    blank = [p["page"] for p in verdicts if p.get("verdict") == "empty"]
+    return messages.scan_unreadable(blurred, blank)
+
+
+def _all_failed(attempts: list[AttemptView]) -> bool:
+    return bool(attempts) and all(a.error is not None for a in attempts)
+
+
+def job_error(kind: str, result: Result) -> JobError | None:
+    """Why a "failed" result failed; None for "ok" and "needs_review" (also when the
+    deadline cut only a repeated read). kind: "pdf" | "image". The first rule that
+    matches wins:
+
+    1. the overall deadline left something unread -> deadline_exceeded;
+    2. no request was sent: the file did not open -> unreadable_file; a photo was
+       rejected -> photo_unreadable, with the message of the flow's first reason; no
+       page of a scan was sent -> scan_unreadable, naming the pages too blurred and the
+       pages without text;
+    3. every request ended in an error, or no line item was read and every request
+       that could bring one (layout, pages) ended in an error -> model_unavailable.
+       Only the first reader's requests count: a second reader that answers while the
+       first model is down must not turn "unavailable" into "no line items";
+    4. no line items -> no_line_items; 5. no header -> no_header;
+    6. anything else is a gap in these rules -> internal_error, logged. The job keeps
+       its result, which shows what was read; a null result is only for a job whose
+       reading raised."""
+    if result.status != "failed":
+        return None
+    codes = [i.check for i in result.issues]
+    if "deadline_exceeded" in codes:
+        return _error("deadline_exceeded")
+    attempts = [a for a in _attempts(_json(result.to_json())) if a.what != "second_reading"]
+    if not attempts:
+        if "unreadable_file" in codes:
+            return _error("unreadable_file")
+        errors = [i.check for i in result.issues if i.severity == "error"]
+        if kind == "image" and any(c.startswith("photo_") for c in errors):
+            return _error("photo_unreadable", _photo_reason(result))
+        if kind == "pdf" and any(c.startswith("scan_") for c in errors):
+            return _error("scan_unreadable", _scan_reason(result))
+    reading = [a for a in attempts if a.what != "header"]
+    if _all_failed(attempts) or (not result.lines and _all_failed(reading)):
+        return _error("model_unavailable")
+    if not result.lines:
+        return _error("no_line_items")
+    if not result.header:
+        return _error("no_header")
+    logger.error("a failed result matches no known reason; issues: %s", codes)
+    return _error("internal_error")

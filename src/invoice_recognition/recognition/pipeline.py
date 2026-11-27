@@ -40,7 +40,7 @@ from invoice_recognition.llm import (
     salvage_lines,
 )
 from invoice_recognition.recognition import carryover as co
-from invoice_recognition.recognition import checks
+from invoice_recognition.recognition import checks, photo
 from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition.checks import Issue
@@ -480,41 +480,48 @@ async def process(
             completion_tokens=0,
         )
 
-    if mime != "application/pdf":
-        return failed([Issue("unreadable_file", f"unsupported file type: {mime}")])
     try:
-        n = page_count(data)
-        texts = ev.pdf_text_layer(data)
-        layout_info["reason"] = "no text layer"
-        if ev.has_text_layer(texts):  # hard checks only against a text layer
-            try:
-                scanned = lay.scanned_pages(data)
-            # Fault boundary: cannot tell, so read it as if the check did not exist.
-            except Exception:
-                logger.warning("could not look for page images", exc_info=True)
-                scanned = []
-            if scanned:  # a scan with somebody's OCR text over it is still a scan
-                layout_info["reason"] = (
-                    f"page image with text over it (pages {scanned[:5]}): treated as a scan"
-                )
-            else:
-                evidence = ev.build(texts, "text_layer")
-                layout_info["reason"] = "disabled"
-                if cfg.use_layout:
-                    try:
-                        text_pages = lay.text_lines(data)
-                    # Fault boundary: the layout road is an optimisation; without it the
-                    # model reads every page.
-                    except Exception as e:
-                        logger.warning("no text layer with coordinates", exc_info=True)
-                        layout_info["reason"] = (
-                            f"text layer with coordinates is not available: {type(e).__name__}: {e}"
-                        )
-        parts = [file_part(extract_pages(data, [p]), mime, f"page{p}.pdf") for p in range(1, n + 1)]
-        # The header is read from the first and the last page.
-        if n:
-            header_pages = [1, n] if n > 1 else [1]
-            header_part = file_part(extract_pages(data, header_pages), mime, "header.pdf")
+        if mime != "application/pdf":
+            # Any other file is a photo: one page, read as an image (photo.py).
+            n = 1
+            parts = [photo.part(photo.load(data))]
+            header_part = parts[0]
+        else:
+            n = page_count(data)
+            texts = ev.pdf_text_layer(data)
+            layout_info["reason"] = "no text layer"
+            if ev.has_text_layer(texts):  # hard checks only against a text layer
+                try:
+                    scanned = lay.scanned_pages(data)
+                # Fault boundary: cannot tell, so read it as if the check did not exist.
+                except Exception:
+                    logger.warning("could not look for page images", exc_info=True)
+                    scanned = []
+                if scanned:  # a scan with somebody's OCR text over it is still a scan
+                    layout_info["reason"] = (
+                        f"page image with text over it (pages {scanned[:5]}): treated as a scan"
+                    )
+                else:
+                    evidence = ev.build(texts, "text_layer")
+                    layout_info["reason"] = "disabled"
+                    if cfg.use_layout:
+                        try:
+                            text_pages = lay.text_lines(data)
+                        # Fault boundary: the layout road is an optimisation; without it
+                        # the model reads every page.
+                        except Exception as e:
+                            logger.warning("no text layer with coordinates", exc_info=True)
+                            layout_info["reason"] = (
+                                "text layer with coordinates is not available: "
+                                f"{type(e).__name__}: {e}"
+                            )
+            parts = [
+                file_part(extract_pages(data, [p]), mime, f"page{p}.pdf") for p in range(1, n + 1)
+            ]
+            # The header is read from the first and the last page.
+            if n:
+                header_pages = [1, n] if n > 1 else [1]
+                header_part = file_part(extract_pages(data, header_pages), mime, "header.pdf")
     except Exception as e:  # fault boundary: a damaged or unsupported file
         logger.warning("file cannot be read", exc_info=True)
         return failed([Issue("unreadable_file", f"{type(e).__name__}: {e}")])

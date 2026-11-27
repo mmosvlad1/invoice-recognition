@@ -18,7 +18,7 @@ from invoice_recognition.recognition.prompts import EXTRACT_PAGE
 from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject, Line
 
-from fakes import Answer, Server, header_for, line, recording, run, scan, sse
+from fakes import Answer, Server, header_for, jpeg, line, photo, recording, run, scan, sse
 from samples import exact, saved_layout, saved_scan_pages, truth, truth_doc
 
 
@@ -292,8 +292,11 @@ def all_bodies(data: bytes, mime: str, cfg: Config, answer: Answer) -> list[str]
     return sorted(json.dumps(b, sort_keys=True) for b in bodies)
 
 
-def test_one_page_pdf_is_asked_exactly_as_before() -> None:
-    data, mime = scan(1), "application/pdf"
+@pytest.mark.parametrize("kind", ["one-page pdf", "photo"])
+def test_one_page_pdf_and_photo_are_asked_exactly_as_before(kind: str) -> None:
+    data, mime = (
+        (scan(1), "application/pdf") if kind == "one-page pdf" else (jpeg(photo()), "image/jpeg")
+    )
     rows = [line(1), line(2)]
     handler, bodies = recording(Server(header_for(rows), {1: [rows]}))
     res = run(data, mime, handler)

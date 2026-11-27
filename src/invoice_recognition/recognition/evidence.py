@@ -71,6 +71,12 @@ def printed_forms(x: Decimal) -> set[str]:
     return out
 
 
+def comparable(token: str) -> str:
+    """A printed word as the presence checks compare it: upper case, trailing
+    punctuation dropped, a typographic minus as "-"."""
+    return token.upper().rstrip(_TRIM).replace("−", "-")
+
+
 @dataclass
 class Row:
     text: str
@@ -79,7 +85,7 @@ class Row:
 
     @property
     def token_set(self) -> set[str]:
-        return {t.upper().rstrip(_TRIM).replace("−", "-") for t in self.tokens}
+        return {comparable(t) for t in self.tokens}
 
 
 @dataclass

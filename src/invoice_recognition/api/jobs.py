@@ -5,6 +5,7 @@ routes and the workers run there), so it needs no lock; the flow's local work on
 own thread never touches it.
 """
 
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,9 +26,14 @@ MAX_FILENAME = 255
 
 def safe_filename(name: str) -> str:
     """The name as text that can always be sent as UTF-8 (a lone surrogate, which a
-    client can send percent-encoded, becomes "?"), cut to MAX_FILENAME characters. It
-    is never interpreted: whoever shows it escapes it."""
-    return name.encode("utf-8", "replace").decode("utf-8")[:MAX_FILENAME]
+    client can send percent-encoded, becomes "?"); only its last path component (after
+    the last "/" or "\\"), so it never names a directory; without Unicode format
+    characters (category Cf, such as U+202E, which makes "<U+202E>fdp.exe" read as
+    "exe.pdf"); cut to MAX_FILENAME characters. It is never interpreted: whoever shows it
+    escapes it."""
+    text = name.encode("utf-8", "replace").decode("utf-8")
+    last = text.replace("\\", "/").rsplit("/", 1)[-1]
+    return "".join(c for c in last if unicodedata.category(c) != "Cf")[:MAX_FILENAME]
 
 
 def now() -> datetime:

@@ -8,12 +8,16 @@ import json
 import re
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
 
 import httpx
+from fastapi import FastAPI
+from pydantic import SecretStr
 from reportlab.pdfgen import canvas
 
+from invoice_recognition.api.settings import Settings
 from invoice_recognition.recognition import pipeline
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
@@ -240,3 +244,27 @@ def never(request: httpx.Request) -> httpx.Response:
 
 def codes(issues: list[Issue]) -> list[str]:
     return [i.check for i in issues]
+
+
+# --------------------------------------------------------------------------- #
+# The API
+# --------------------------------------------------------------------------- #
+
+
+def api_settings() -> Settings:
+    """Settings for a test app: every field given and no .env read, so a developer's
+    environment cannot leak in. The key is a dummy; no request leaves the test."""
+    return Settings(_env_file=None, openrouter_api_key=SecretStr("test-key"))
+
+
+@asynccontextmanager
+async def api_client(
+    app: FastAPI, *, raise_app_exceptions: bool = True
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A client that sends its requests straight to `app`, in the test's own event loop.
+
+    raise_app_exceptions=False: an exception the app does not handle comes back as the
+    500 a server would send, instead of being raised in the test."""
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client

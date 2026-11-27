@@ -8,16 +8,22 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.165.0",
+    "fastapi-cli>=0.0.34",
     "httpx>=0.29.0",
     "numpy>=2.5.5",
     "opencv-python-headless>=5.1.0.95",
     "pillow>=13.0.0",
+    "pydantic>=2.14.4",
+    "pydantic-core>=2.50.5",
+    "pydantic-settings>=2.16.3",
     "pypdf[crypto]>=7.2.0",
     "pypdfium2>=5.15.2",
 ]
 
 [dependency-groups]
 dev = [
+    "anyio>=4.16.0",
     "mypy>=2.4.1",
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
@@ -39,6 +45,10 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 addopts = ["--import-mode=importlib", "-ra"]
 
+[tool.fastapi]
+# What `uv run fastapi dev` and `uv run fastapi run` serve.
+entrypoint = "invoice_recognition.api.main:app"
+
 [tool.ruff]
 line-length = 100
 
@@ -52,6 +62,13 @@ known-local-folder = ["drawn", "fakes", "golden_cases", "samples"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+# Checks the arguments of pydantic models and settings; without it mypy rejects
+# Settings() whose required fields come from the environment.
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
 
 # pypdfium2 ships no type information (no py.typed, no stubs). Following its
 # untyped code gives nothing to check (every value is Any) and trips

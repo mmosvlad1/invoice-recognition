@@ -1,5 +1,6 @@
 """Deterministic checks of an extraction."""
 
+from collections.abc import Callable
 from decimal import Decimal
 
 import pytest
@@ -56,15 +57,40 @@ def test_dec(value: object, expected: Decimal | None) -> None:
     assert dec(value) == expected
 
 
-def test_issue_json_leaves_out_an_unknown_line_number() -> None:
+def test_issue_json_leaves_out_an_unknown_line_number_and_what_is_empty() -> None:
     assert Issue("tax", "m").to_json() == {
         "check": "tax",
         "message": "m",
         "line": None,
         "page": None,
         "severity": "error",
+        "fields": [],  # always there: the page gets one shape
     }
     assert Issue("line_math", "m", line=0, page=2, line_no=7).to_json()["line_no"] == 7
+
+
+def test_issue_json_with_fields_suggestions_and_what_it_follows_from() -> None:
+    suggestion = {"set": {"line.amount": 74.16}, "source": "arithmetic"}
+    issue = Issue(
+        "doc_sums",
+        "m",
+        fields=["header.subtotal", "line.amount"],
+        suggestions=[suggestion],
+        follows_from=[0, 3],
+    )
+    assert issue.to_json() == {
+        "check": "doc_sums",
+        "message": "m",
+        "line": None,
+        "page": None,
+        "severity": "error",
+        "fields": ["header.subtotal", "line.amount"],
+        "suggestions": [{"set": {"line.amount": 74.16}, "source": "arithmetic"}],
+        "follows_from": [0, 3],
+    }
+    # The JSON is a copy: changing it leaves the issue as it was.
+    issue.to_json()["suggestions"][0]["set"]["line.amount"] = 1
+    assert issue.suggestions == [suggestion]
 
 
 # --------------------------------------------------------------------------- #
@@ -464,3 +490,189 @@ def test_numbers_of_absurd_size_from_the_model_do_not_crash_the_checks() -> None
     assert check_header_grounding(doc, ev) == []
     assert check_coverage(doc, ev) == []
     assert check_grounding(doc, ev) == []  # the sku is on a row; no other value is known
+
+
+# --------------------------------------------------------------------------- #
+# The fields each issue is about
+# --------------------------------------------------------------------------- #
+
+FIELDS_EV = build([PAGE_1, PAGE_2], "text_layer")
+TWO = [line(1), line(2)]
+HEADER = header_for(TWO)  # subtotal 40, tax 8, total 48
+
+
+@pytest.mark.parametrize(
+    ("issues", "message", "fields"),
+    [
+        pytest.param(
+            lambda: check_doc_sums({"header": HEADER | {"supplier_name": None}, "lines": TWO}),
+            "supplier is missing",
+            ["header.supplier_name"],
+            id="doc_sums-supplier",
+        ),
+        pytest.param(
+            lambda: check_doc_sums({"header": HEADER, "lines": []}),
+            "no line items",
+            [],
+            id="doc_sums-no-lines",
+        ),
+        pytest.param(
+            lambda: check_doc_sums(
+                {"header": HEADER | {"subtotal": None, "total": "n/a"}, "lines": TWO}
+            ),
+            "totals are missing in the header",
+            ["header.subtotal", "header.total"],  # only the missing ones
+            id="doc_sums-totals-missing",
+        ),
+        pytest.param(
+            lambda: check_doc_sums(
+                {"header": header_for([line(1)]), "lines": [line(1), line(2) | {"amount": None}]}
+            ),
+            "some lines have no amount",
+            ["line.amount"],  # the column: one issue for every such line
+            id="doc_sums-amount-missing",
+        ),
+        pytest.param(
+            lambda: check_doc_sums(
+                {"header": HEADER | {"subtotal": 45.0, "total": 53.0}, "lines": TWO}
+            ),
+            "lines add up to 40.0, invoice subtotal is 45.0 (difference -5.0)",
+            ["header.subtotal", "line.amount"],
+            id="doc_sums-lines-against-subtotal",
+        ),
+        pytest.param(
+            lambda: check_doc_sums({"header": HEADER | {"total": 50.0}, "lines": TWO}),
+            "subtotal 40.0 + tax 8.0 != total 50.0",
+            ["header.subtotal", "header.tax_total", "header.total"],
+            id="doc_sums-header-arithmetic",
+        ),
+        pytest.param(
+            lambda: check_line_math({"lines": [line(1) | {"unit_price": None, "amount": "?"}]}),
+            "quantity, unit price or amount is missing or is not a usable number",
+            ["line.unit_price", "line.amount"],  # only the missing ones
+            id="line_math-missing",
+        ),
+        pytest.param(
+            lambda: check_line_math({"lines": [line(1, amount=25.0)]}),
+            "2 x 10.0 = 20.00, but amount is 25.0",
+            ["line.quantity", "line.unit_price", "line.amount"],
+            id="line_math-mismatch",
+        ),
+        pytest.param(
+            lambda: check_line_math(
+                {"lines": [line(1, price=1000.0, amount=4000.0) | {"quantity": 0.004}]}
+            ),
+            "0.004 x 1000.0 = 4.00, but amount is 4000.0"
+            " (quantity looks 1000x too small: thousands separator read as a decimal point)",
+            ["line.quantity"],
+            id="line_math-x1000",
+        ),
+        pytest.param(
+            lambda: check_tax(
+                {
+                    "header": {"tax_breakdown": [{"rate": 20, "base": 20, "tax": 4}]},
+                    "lines": [line(1), line(2) | {"tax_rate": 7}],
+                }
+            ),
+            "lines carry 7% tax on 20.0, but the invoice has no 7% row",
+            ["line.tax_rate", "header.tax_breakdown"],
+            id="tax-rate-not-printed",
+        ),
+        pytest.param(
+            lambda: check_tax(
+                {"header": {"tax_breakdown": [{"rate": 20, "base": 25, "tax": 5}]}, "lines": TWO}
+            ),
+            "lines at 20% add up to 40.0, invoice says 25",
+            ["line.tax_rate", "line.amount", "header.tax_breakdown"],
+            id="tax-base-of-a-rate",
+        ),
+        pytest.param(
+            lambda: check_tax({"header": {"tax_total": 9.0}, "lines": TWO}),
+            "tax computed from lines is 8.00, invoice says 9.0",
+            ["header.tax_total", "line.tax_rate"],
+            id="tax-without-breakdown",
+        ),
+        pytest.param(
+            lambda: check_numbering({"lines": [line(1), line(2), line(2), line(3)]}),
+            "position numbers repeated: [2]",
+            ["line.line_no"],
+            id="numbering-repeated",
+        ),
+        pytest.param(
+            lambda: check_numbering({"lines": [line(1), line(2), line(5)]}),
+            "2 position number(s) missing, e.g. [3, 4]",
+            [],  # a whole row is missing, not a cell
+            id="numbering-missing",
+        ),
+        pytest.param(
+            lambda: check_checkpoints({"lines": FOUR, "checkpoints": [cp(40, 2), cp(45, 4)]}),
+            'lines 3-4 add up to 40.0, but "control total" says 45',
+            [],
+            id="checkpoints",
+        ),
+        pytest.param(
+            lambda: check_grounding(
+                {"lines": on_page([line(1, qty=3, amount=30.0)], 1)}, FIELDS_EV
+            ),
+            "not printed on the page: quantity, amount",
+            ["line.quantity", "line.amount"],  # exactly the values not found
+            id="grounding_value",
+        ),
+        pytest.param(
+            lambda: check_grounding(
+                {"lines": on_page([line(1, price=7.5, amount=20.0)], 1)}, FIELDS_EV
+            ),
+            "not printed on the page: unit_price",  # 2 and 20.00 are printed, 7.50 is not
+            ["line.unit_price"],
+            id="grounding_value-unit-price",
+        ),
+        pytest.param(
+            lambda: check_grounding({"lines": on_page([line(1), line(1)], 1)}, FIELDS_EV),
+            "values exist on the page but not together in one row",
+            ["line.sku", "line.quantity", "line.unit_price", "line.amount"],
+            id="grounding_row",
+        ),
+        pytest.param(
+            lambda: check_grounding(
+                {"lines": on_page([line(1) | {"sku": None, "unit_price": "?"}] * 3, 1)},
+                FIELDS_EV,
+            )[-1:],
+            "values exist on the page but not together in one row",
+            ["line.quantity", "line.amount"],  # no sku and no price were looked for
+            id="grounding_row-without-sku",
+        ),
+        pytest.param(
+            lambda: check_header_grounding({"header": {"total": 99.5}}, FIELDS_EV),
+            "total 99.5 is not printed anywhere in the document",
+            ["header.total"],
+            id="grounding_header-number",
+        ),
+        pytest.param(
+            lambda: check_header_grounding({"header": {"po_number": "PO-9"}}, FIELDS_EV),
+            'po_number "PO-9" is not printed anywhere in the document',
+            ["header.po_number"],
+            id="grounding_header-identifier",
+        ),
+        pytest.param(
+            lambda: check_coverage(
+                {"lines": on_page([line(1)], 1) + on_page([line(3)], 2)}, FIELDS_EV
+            ),
+            "page 1: 2 item rows printed, 1 extracted",
+            [],
+            id="coverage-page",
+        ),
+        pytest.param(
+            lambda: check_coverage({"lines": [line(1)]}, FIELDS_EV),
+            "3 item rows printed, 1 extracted",
+            [],
+            id="coverage-document",
+        ),
+    ],
+)
+def test_every_issue_names_the_fields_it_is_about(
+    issues: Callable[[], list[Issue]], message: str, fields: list[str]
+) -> None:
+    (issue,) = issues()
+    assert issue.message == message
+    assert issue.fields == fields
+    assert issue.to_json()["fields"] == fields

@@ -2,7 +2,8 @@
 
 Each check answers a different question and, where it can, says WHERE the
 problem is (line, page), so the flow can re-read one page instead of the
-whole document and the user can be shown the doubtful rows.
+whole document and the user can be shown the doubtful rows - and which fields
+of that row or of the header are in doubt (Issue.fields).
 
 Expected shape of `doc`:
     header:      {supplier_name, subtotal, tax_total, total,
@@ -14,7 +15,7 @@ Expected shape of `doc`:
 """
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import cast
 
@@ -31,13 +32,27 @@ class Issue:
     severity: str = "error"
     # Position number printed in front of that line, when the document numbers its lines.
     line_no: int | None = None
+    # What is in doubt, as qualified names: "line.<key>" (a key of a line item) or
+    # "header.<key>". With `line` set, "line.x" is that cell of that line; without it,
+    # "line.x" is the whole column, never every row of it. [] - the page or the file as a
+    # whole, not any cell.
+    fields: list[str] = field(default_factory=list)
+    # Values that would settle the issue, each an alternative to the others:
+    # {"set": {<field>: <value>, ...}, "source": ...}. Usually none.
+    suggestions: list[JSONObject] = field(default_factory=list)
+    # Positions in Result.issues of the issues that explain this one: the same mistake,
+    # seen by another check.
+    follows_from: list[int] = field(default_factory=list)
 
     def to_json(self) -> JSONObject:
         out = asdict(self)
-        # Left out when unknown: most issues are not about a numbered line, and their
-        # JSON then has only the keys every issue has.
+        # Left out when unknown or empty: most issues are not about a numbered line and
+        # have nothing to suggest, and their JSON then has only the keys every issue has.
         if out["line_no"] is None:
             del out["line_no"]
+        for key in ("suggestions", "follows_from"):
+            if not out[key]:
+                del out[key]
         return out
 
 
@@ -88,15 +103,21 @@ def check_doc_sums(doc: Doc) -> list[Issue]:
     supplier = header.get("supplier_name")
     # A number, list or object is not a supplier name.
     if not (isinstance(supplier, str) and supplier.strip()):
-        out.append(Issue("doc_sums", "supplier is missing"))
+        out.append(Issue("doc_sums", "supplier is missing", fields=["header.supplier_name"]))
     if not lines:
         return [*out, Issue("doc_sums", "no line items")]
     subtotal, tax, total = (dec(header.get(k)) for k in ("subtotal", "tax_total", "total"))
     amounts = [dec(item.get("amount")) for item in lines]
     if subtotal is None or tax is None or total is None:
-        return [*out, Issue("doc_sums", "totals are missing in the header")]
+        missing = [
+            f"header.{k}"
+            for k, v in (("subtotal", subtotal), ("tax_total", tax), ("total", total))
+            if v is None
+        ]
+        return [*out, Issue("doc_sums", "totals are missing in the header", fields=missing)]
     if None in amounts:
-        out.append(Issue("doc_sums", "some lines have no amount"))
+        # One issue for every line without an amount: the column, not each row.
+        out.append(Issue("doc_sums", "some lines have no amount", fields=["line.amount"]))
     lines_sum = sum((a for a in amounts if a is not None), Decimal(0))
     if abs(lines_sum - subtotal) > CENT:
         out.append(
@@ -104,10 +125,17 @@ def check_doc_sums(doc: Doc) -> list[Issue]:
                 "doc_sums",
                 f"lines add up to {lines_sum}, invoice subtotal is {subtotal} "
                 f"(difference {lines_sum - subtotal})",
+                fields=["header.subtotal", "line.amount"],
             )
         )
     if abs(subtotal + tax - total) > CENT:
-        out.append(Issue("doc_sums", f"subtotal {subtotal} + tax {tax} != total {total}"))
+        out.append(
+            Issue(
+                "doc_sums",
+                f"subtotal {subtotal} + tax {tax} != total {total}",
+                fields=["header.subtotal", "header.tax_total", "header.total"],
+            )
+        )
     return out
 
 
@@ -121,26 +149,36 @@ def check_line_math(doc: Doc) -> list[Issue]:
     for i, item in enumerate(_lines(doc)):
         q, p, a = dec(item.get("quantity")), dec(item.get("unit_price")), dec(item.get("amount"))
         if q is None or p is None or a is None:
+            missing = [
+                f"line.{k}"
+                for k, v in (("quantity", q), ("unit_price", p), ("amount", a))
+                if v is None
+            ]
             out.append(
                 Issue(
                     "line_math",
                     "quantity, unit price or amount is missing or is not a usable number",
                     line=i,
                     page=item.get("page"),
+                    fields=missing,
                 )
             )
         elif abs(money(q * p) - a) > CENT:
             hint = ""
+            # Arithmetic cannot say which of the three numbers is wrong; the hint can.
+            doubt = ["line.quantity", "line.unit_price", "line.amount"]
             if abs(money(q * 1000 * p) - a) <= CENT:
                 hint = (
                     " (quantity looks 1000x too small: thousands separator read as a decimal point)"
                 )
+                doubt = ["line.quantity"]
             out.append(
                 Issue(
                     "line_math",
                     f"{q} x {p} = {money(q * p)}, but amount is {a}{hint}",
                     line=i,
                     page=item.get("page"),
+                    fields=doubt,
                 )
             )
     return out
@@ -182,6 +220,7 @@ def check_tax(doc: Doc) -> list[Issue]:
                             "tax",
                             f"lines carry {rate}% tax on {base_lines}, "
                             f"but the invoice has no {rate}% row",
+                            fields=["line.tax_rate", "header.tax_breakdown"],
                         )
                     )
             elif abs(base_lines - base_printed) > CENT:
@@ -189,6 +228,7 @@ def check_tax(doc: Doc) -> list[Issue]:
                     Issue(
                         "tax",
                         f"lines at {rate}% add up to {base_lines}, invoice says {base_printed}",
+                        fields=["line.tax_rate", "line.amount", "header.tax_breakdown"],
                     )
                 )
     else:
@@ -199,7 +239,11 @@ def check_tax(doc: Doc) -> list[Issue]:
         )
         if tax_total is not None and abs(expected - tax_total) > Decimal("0.05"):
             out.append(
-                Issue("tax", f"tax computed from lines is {expected}, invoice says {tax_total}")
+                Issue(
+                    "tax",
+                    f"tax computed from lines is {expected}, invoice says {tax_total}",
+                    fields=["header.tax_total", "line.tax_rate"],
+                )
             )
     return out
 
@@ -218,7 +262,13 @@ def check_numbering(doc: Doc) -> list[Issue]:
     out = []
     dup = [n for n, c in Counter(ints).items() if c > 1]
     if dup:
-        out.append(Issue("numbering", f"position numbers repeated: {sorted(dup)[:10]}"))
+        out.append(
+            Issue(
+                "numbering",
+                f"position numbers repeated: {sorted(dup)[:10]}",
+                fields=["line.line_no"],
+            )
+        )
     present = set(ints)
     missing = [n for n in range(min(ints), max(ints) + 1) if n not in present]
     if missing:
@@ -231,6 +281,8 @@ def check_numbering(doc: Doc) -> list[Issue]:
                 f"{len(missing)} position number(s) missing, e.g. {missing[:10]}",
                 line=nxt,
                 page=page,
+                # A whole row is missing before this one; no cell of this one is in doubt.
+                fields=[],
             )
         )
     return out
@@ -278,6 +330,9 @@ def check_checkpoints(doc: Doc, partial: bool = False) -> list[Issue]:
                     f'lines {prev_pos + 1}-{pos} add up to {segment}, but "{label}" says {amount}',
                     line=prev_pos,
                     page=c.get("page"),
+                    # Not "line.amount": the line is only the first row of the segment, and
+                    # framing its amount would point at a cell that may well be right.
+                    fields=[],
                 )
             )
         prev_pos, prev_amount = pos, amount
@@ -327,6 +382,7 @@ def check_grounding(doc: Doc, evidence: Evidence) -> list[Issue]:
                     f"not printed on the page: {', '.join(absent)}",
                     line=i,
                     page=item.get("page"),
+                    fields=[f"line.{k}" for k in absent],
                 )
             )
         else:
@@ -336,6 +392,9 @@ def check_grounding(doc: Doc, evidence: Evidence) -> list[Issue]:
                     "values exist on the page but not together in one row",
                     line=i,
                     page=item.get("page"),
+                    # The values that were looked for: a line without an sku is matched
+                    # without one, and a value that is not a number is not looked for.
+                    fields=[f"line.{k}" for k in (["sku"] if sku else []) + list(forms)],
                 )
             )
     return out
@@ -353,13 +412,21 @@ def check_header_grounding(doc: Doc, evidence: Evidence) -> list[Issue]:
         v = dec(header.get(key))
         if v is not None and not (printed_forms(v) & tokens):
             out.append(
-                Issue("grounding_header", f"{key} {v} is not printed anywhere in the document")
+                Issue(
+                    "grounding_header",
+                    f"{key} {v} is not printed anywhere in the document",
+                    fields=[f"header.{key}"],
+                )
             )
     for key in ("invoice_number", "supplier_tax_id", "po_number"):
         s = str(header.get(key) or "").upper().strip()
         if s and " " not in s and s not in tokens:
             out.append(
-                Issue("grounding_header", f'{key} "{s}" is not printed anywhere in the document')
+                Issue(
+                    "grounding_header",
+                    f'{key} "{s}" is not printed anywhere in the document',
+                    fields=[f"header.{key}"],
+                )
             )
     return out
 

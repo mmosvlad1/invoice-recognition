@@ -18,6 +18,11 @@ tokens, counts) are what a provider reported, so they are read tolerantly (`_num
 a numeric string as its number, a count sent as a float rounded, anything else as not
 reported. The totals are summed from the attempts' views, after that.
 
+Where each line is printed (`lines[].boxes`, `pages[].width` / `height` / `text_layer`)
+comes from the flow's own rectangles, not from the model: each line's boxes are
+validated on their own (`_boxes`), so a rectangle that does not fit costs that line its
+boxes and nothing else; rectangles stay tuples and never go through `_json`.
+
 A view is built once, when the job finishes, and validated then: what still does not
 fit fails there, inside the worker's fault boundary, and never makes a later status
 request fail; a view that was built always serialises. Every field is sent, so the
@@ -33,11 +38,21 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 import numpy as np
-from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+)
 
 from invoice_recognition.api import messages, review
+from invoice_recognition.recognition.boxes import BOX_KEYS
 from invoice_recognition.recognition.checks import Issue, dec
-from invoice_recognition.recognition.results import Result
+from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject, Line
 
 if TYPE_CHECKING:  # jobs.py holds views; at run time only the annotations name them
@@ -95,6 +110,50 @@ class HeaderView(_Open):
     )
 
 
+RECT = (
+    "[x0, y0, x1, y1]: left, top, right, bottom in PDF points of the page as displayed "
+    "(crop box, /Rotate), origin top-left, y down; place in proportion to the PDF.js "
+    "viewport (x * viewport.width / width). Rounded outwards to 0.1."
+)
+
+type Coordinate = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
+def _ordered(rect: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = rect
+    if not (x0 < x1 and y0 < y1):
+        raise ValueError("a rectangle runs left to right and top to bottom")
+    return rect
+
+
+type Rect = Annotated[
+    tuple[Coordinate, Coordinate, Coordinate, Coordinate], AfterValidator(_ordered)
+]
+
+
+def _rect(description: str = RECT) -> Any:
+    return Field(default=None, description=description)
+
+
+class BoxesView(_View):
+    """Where a line is printed, on its own page. A key is null when its value is not
+    framed: it is empty, not printed in the row, could not be told apart, or is not
+    looked for on that road."""
+
+    row: Rect = Field(
+        description="The whole printed item - layout road: the row with its wrapped "
+        "description; model road: the item row only. " + RECT
+    )
+    line_no: Rect | None = _rect()
+    sku: Rect | None = _rect()
+    description: Rect | None = _rect("Layout road only. " + RECT)
+    quantity: Rect | None = _rect()
+    unit: Rect | None = _rect("Layout road only. " + RECT)
+    unit_price: Rect | None = _rect()
+    tax_rate: Rect | None = _rect()
+    amount: Rect | None = _rect()
+
+
 class LineView(_Open):
     index: int = Field(description="Position of the line in the document, from 0.")
     page: int | None = Field(default=None, description="The page the line is printed on.")
@@ -106,6 +165,11 @@ class LineView(_Open):
     unit_price: JsonValue = _read()
     tax_rate: JsonValue = _read()
     amount: JsonValue = _read()
+    boxes: BoxesView | None = Field(
+        default=None,
+        description="Where the line is printed on `page`; null when not located (a scan, a "
+        "photo, a page without a usable box, values printed nowhere on the page).",
+    )
 
 
 class IssueView(_View):
@@ -155,6 +219,15 @@ class PageView(_View):
     method: str = Field(description="layout (rows found by code) | model | skipped.")
     line_count: int
     repaired_count: int = Field(description="Lines on the page whose quantity code corrected.")
+    width: float | None = Field(
+        description="Displayed width in points (crop box, /Rotate), rounded to 0.1: the frame "
+        "of the rectangles in lines[].boxes. null for a photo or no usable page box."
+    )
+    height: float | None = Field(description="Displayed height in points; null as width.")
+    text_layer: bool = Field(
+        description="The page has its own printed text that values can be located in; "
+        "false for a scan, even with an OCR overlay, and for a photo."
+    )
 
 
 class LayoutView(_Open):
@@ -278,6 +351,52 @@ def _line(index: int, line: Line) -> JSONObject:
     return {"index": index} | {k: v for k, v in clean.items() if k != "index"}
 
 
+def _boxes(result: Result) -> list[BoxesView | None]:
+    """The boxes of every line, each validated on its own: one that does not fit is
+    dropped (null) with a warning, the line and the rest stay. A list that is not
+    parallel to the lines gives every line null."""
+    found: Any = result.boxes
+    if not isinstance(found, list) or len(found) != len(result.lines):
+        if found:
+            logger.error("boxes do not match the lines of the result; none are shown")
+        return [None] * len(result.lines)
+    out: list[BoxesView | None] = []
+    for index, boxes in enumerate(found):
+        if boxes is None:
+            out.append(None)
+            continue
+        try:
+            if not isinstance(boxes, dict) or set(boxes) != set(BOX_KEYS):
+                raise TypeError(f"not the keys of a line's boxes: {type(boxes).__name__}")
+            out.append(BoxesView.model_validate(boxes))
+        except (ValidationError, TypeError) as e:
+            logger.warning("the boxes of line %d are dropped: %s", index, e)
+            out.append(None)
+    return out
+
+
+def _size(value: Any) -> float | None:
+    """A side of a page frame: a positive finite number, else unknown."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) and value > 0 else None
+
+
+def _page(p: PageResult, result: Result) -> JSONObject:
+    frames: Any = result.frames
+    i = p.page - 1
+    frame = frames[i] if isinstance(frames, list) and 0 <= i < len(frames) else None
+    return {
+        "page": p.page,
+        "method": _utf8(p.method),
+        "line_count": len(p.lines),
+        "repaired_count": p.repaired,
+        "width": _size(getattr(frame, "width", None)),
+        "height": _size(getattr(frame, "height", None)),
+        "text_layer": result.text_layer is True,
+    }
+
+
 def _issue(id_: int, issue: Issue, lines: list[JSONObject]) -> JSONObject:
     # From the issue's JSON: keys an issue does not carry (yet) take their defaults. The
     # message is worded with the line it is about, as the view shows it (JSON-safe).
@@ -385,21 +504,15 @@ def result_view(result: Result) -> ResultView:
     ValidationError) when the result holds something that is not JSON."""
     attempts = _attempts(_json(result.to_json()))
     lines = [_line(i, line) for i, line in enumerate(result.lines)]
+    for line, boxes in zip(lines, _boxes(result), strict=True):
+        line["boxes"] = boxes  # last: a key "boxes" the model may have sent does not stay
     view = {
         "header": _json(result.header),
         "lines": lines,
         "issues": [_issue(k, issue, lines) for k, issue in enumerate(result.issues)],
         "notes": [_note(n) for n in result.notes] + _repair_notes(result.lines),
         "checkpoints": [_json(c) for c in result.checkpoints],
-        "pages": [
-            {
-                "page": p.page,
-                "method": _utf8(p.method),
-                "line_count": len(p.lines),
-                "repaired_count": p.repaired,
-            }
-            for p in result.pages
-        ],
+        "pages": [_page(p, result) for p in result.pages],
         "details": {
             "method": _utf8(result.method),
             "layout": _json(result.layout) if result.layout else None,

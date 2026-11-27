@@ -12,7 +12,9 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from PIL import Image
 from pypdf import PdfWriter
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from invoice_recognition.recognition import pipeline
@@ -176,3 +178,21 @@ def scan(pages: int) -> bytes:
 
 def codes(issues: list[Issue]) -> list[str]:
     return [i.check for i in issues]
+
+
+def scan_with_ocr_text(rows: list[Line]) -> bytes:
+    """A scanned page (one image over the whole sheet) with a text layer laid over it by
+    some OCR program, drawn as visible text."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(595, 842), invariant=True)
+    c.drawImage(ImageReader(Image.new("L", (300, 424), 235)), 0, 0, width=595, height=842)
+    c.setFont("Helvetica", 9)
+    c.drawString(40, 800, "ACME Ltd   Invoice INV-1   SKU Description Qty Unit price Amount")
+    for n, r in enumerate(rows):
+        c.drawString(
+            40,
+            780 - 14 * n,
+            f"{r['sku']} {r['description']} {r['quantity']} {r['unit_price']:.2f} {r['amount']:.2f}",
+        )
+    c.save()
+    return buf.getvalue()

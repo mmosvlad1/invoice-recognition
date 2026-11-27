@@ -43,8 +43,8 @@ line-length = 100
 extend-select = ["FAST"]
 
 [tool.ruff.lint.isort]
-# Shared test helpers, imported as a top-level module through pytest's pythonpath.
-known-local-folder = ["fakes"]
+# Shared test helpers, imported as top-level modules through pytest's pythonpath.
+known-local-folder = ["fakes", "samples"]
 
 [tool.mypy]
 strict = true

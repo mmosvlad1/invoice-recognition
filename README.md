@@ -124,6 +124,15 @@ and may carry suggested values that would settle it), notes, control totals,
 how each page was read and the cost and time of every model request. A failed job keeps what was read, except when reading
 raised (`internal_error`). An unknown id is `404 not_found`.
 
+Where each value is printed: in a PDF with its own text layer, every line has
+`boxes` - a rectangle `[x0, y0, x1, y1]` for the whole item (`row`) and for each
+value it frames (`sku`, `quantity`, `amount`, ...; `null` when not framed), on the
+line's own `page`. They are in points of the page as displayed (crop box, `/Rotate`),
+origin top-left, y down, and `pages[].width` / `height` is that page's size; to draw
+on a page rendered `W` × `H` pixels, take `x · W / width` and `y · H / height`.
+Scans and photos carry the page only: `boxes` is `null` and `pages[].text_layer` is
+`false` (a photo has no `width` / `height` either).
+
 ### `GET /invoices`: every job
 
 ```bash
@@ -238,7 +247,7 @@ The code keeps strangers out; it does not tell users apart.
 - a container image and the deployment;
 - a second reading of scans by another model, and a fallback model when a
   request fails;
-- where each value is printed on the page (`lines[].boxes`).
+- where each value is printed on a scan or a photo (no OCR: only the page).
 
 ## Development
 
@@ -255,3 +264,9 @@ The tests need no network and no key: the model provider is replaced by a fake
 server (`tests/fakes.py`). The API tests are async (the anyio pytest plugin,
 requests sent to the app through `httpx.ASGITransport`); the tests of the
 recognition flow are plain functions that call `asyncio.run`.
+
+The tests run on macOS and on Linux (CI). One thing differs between them: for a
+font a PDF does not embed (the standard Helvetica of the sample invoices), pdfium
+measures characters on a substitute font, so where a word starts and ends along
+its line can differ by up to about 0.9 point; the tests allow for that, and the
+height of a word is computed from its baseline and font size, the same on both.

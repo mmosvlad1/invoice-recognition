@@ -27,16 +27,20 @@ serialisation schema marks each as required.
 import json
 import logging
 import math
+from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 import numpy as np
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue
+from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue
 
 from invoice_recognition.api import messages
 from invoice_recognition.recognition.checks import Issue, dec
 from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import JSONObject, Line
+
+if TYPE_CHECKING:  # jobs.py holds views; at run time only the annotations name them
+    from invoice_recognition.api.jobs import Job, Kind, Status
 
 logger = logging.getLogger(__name__)
 
@@ -494,3 +498,98 @@ def job_error(kind: str, result: Result) -> JobError | None:
         return _error("no_header")
     logger.error("a failed result matches no known reason; issues: %s", codes)
     return _error("internal_error")
+
+
+# --------------------------------------------------------------------------- #
+# A job
+# --------------------------------------------------------------------------- #
+
+
+class Progress(_View):
+    pages_total: int = Field(description="Known at upload; 1 for an image.")
+    pages_done: int = Field(
+        description="Pages whose reading is settled, skipped ones included. A hint for a "
+        "progress bar, not a sign that the job is finished: only a final status is."
+    )
+
+
+class JobItem(_View):
+    """A job in the list: everything but the result."""
+
+    id: str
+    filename: str = Field(description="As the client sent it: untrusted text, never HTML.")
+    kind: Literal["pdf", "image"]
+    size_bytes: int
+    status: Literal["queued", "processing", "ok", "needs_review", "failed"] = Field(
+        description="Final statuses: ok, needs_review, failed."
+    )
+    created_at: AwareDatetime
+    started_at: AwareDatetime | None
+    finished_at: AwareDatetime | None
+    progress: Progress
+    error: JobError | None = Field(description="Only for failed: why.")
+    line_count: int | None = Field(description="Once finished; null without a result.")
+    issue_count: int | None = Field(description="Once finished; null without a result.")
+
+
+class JobView(_View):
+    """A job with its result (GET /invoices/{id})."""
+
+    id: str
+    filename: str = Field(description="As the client sent it: untrusted text, never HTML.")
+    kind: Literal["pdf", "image"]
+    size_bytes: int
+    status: Literal["queued", "processing", "ok", "needs_review", "failed"] = Field(
+        description="Final statuses: ok, needs_review, failed."
+    )
+    created_at: AwareDatetime
+    started_at: AwareDatetime | None
+    finished_at: AwareDatetime | None
+    progress: Progress
+    error: JobError | None = Field(description="Only for failed: why.")
+    result: ResultView | None = Field(
+        description="null until finished, and for a job whose reading raised."
+    )
+
+
+class _Common(TypedDict):
+    """The fields JobView and JobItem share, typed so that the models check them."""
+
+    id: str
+    filename: str
+    kind: Kind
+    size_bytes: int
+    status: Status
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    progress: Progress
+    error: JobError | None
+
+
+def _common(job: Job) -> _Common:
+    return {
+        "id": job.id,
+        "filename": job.filename,
+        "kind": job.kind,
+        "size_bytes": job.size_bytes,
+        "status": job.status,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "progress": Progress(pages_total=job.pages_total, pages_done=job.pages_done),
+        "error": job.error if job.finished else None,
+    }
+
+
+def job_view(job: Job) -> JobView:
+    return JobView(**_common(job), result=job.view if job.finished else None)
+
+
+def job_item(job: Job) -> JobItem:
+    view = job.view if job.finished else None
+    return JobItem(
+        **_common(job),
+        line_count=None if view is None else len(view.lines),
+        issue_count=None if view is None else len(view.issues),
+    )

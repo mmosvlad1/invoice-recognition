@@ -25,6 +25,14 @@ A photo (any file that is not a PDF) is measured before the first request
 (quality.py): a cut sheet, blur, darkness, glare. A photo that cannot be read ends as
 "failed" with the reason and no request; a doubtful one is read and carries the
 reason as an issue.
+
+A scanned PDF (no text layer, or page images with somebody's OCR text over them) is
+measured page by page before the first request, by the same numbers minus what is about
+a sheet on a desk (quality.judge_page). A page without text is not sent and leaves a
+note; a page too blurred to read is not sent and leaves the issue "scan_blurred" with its
+number, the other pages are read as usual; a doubtful page is read and flagged
+"scan_<code>". When no page is left to read, the document ends as "failed" with no
+request.
 """
 
 import asyncio
@@ -399,6 +407,7 @@ def join_carried(pages: list[PageResult]) -> list[JSONObject]:
             "rows": co.flow_rows(pr.lines, pr.totals),
             "carry_in": pr.carry_in,
             "unread": any(i.check == "page_read" for i in pr.issues),
+            "skipped": pr.method == "skipped",
             "joined_by_code": pr.method == "layout",
         }
         for pr in pages
@@ -502,6 +511,98 @@ def _photo_quality(img: Image.Image, cfg: Config) -> tuple[JSONObject, list[Issu
         return {"verdict": "unchecked", "error": f"{type(e).__name__}: {e}", "reasons": []}, []
 
 
+def _scan_issue(r: ql.Reason, page: int, lim: ql.ScanLimits) -> Issue:
+    """A reject or warn reason of a scanned page as an issue, with the number and its limit."""
+    reject = r.severity == "reject"
+    limit = lim.sharpness_reject if reject else lim.sharpness_warn
+    text = {
+        "blurred": f"Text sharpness {r.value} of the page is below {limit:g}.",
+        "dark": f"Paper brightness {r.value} of 255 is below {lim.paper_level:g}.",
+    }.get(r.code) or r.code
+    if reject:
+        text += " The page was not sent to the model."
+    return Issue(f"scan_{r.code}", text, page=page, severity="error" if reject else "warning")
+
+
+def _scan_quality(
+    data: bytes, n: int, cfg: Config
+) -> tuple[JSONObject, dict[int, str], dict[int, list[Issue]], list[JSONObject]]:
+    """Measure every page of a scanned PDF of n pages. Returns (Result.quality, pages that
+    are not sent {page: "empty" | "reject"}, issues by page, notes for Result.notes).
+    Never raises: a page the check cannot measure is read the way every page was read
+    before the check existed."""
+    try:
+        names = {f.name for f in dataclass_fields(ql.ScanLimits)}
+        lim = ql.ScanLimits(
+            **{k[5:]: v for k, v in asdict(cfg).items() if k.startswith("scan_") and k[5:] in names}
+        )
+        measured = ql.measure_pdf_pages(data)
+        # The renderer and the splitter disagree about the pages: no verdict can be tied to
+        # a page.
+        if len(measured) != n:
+            raise ValueError(f"{len(measured)} pages measured, the document has {n}")
+    except Exception as e:  # fault boundary: the measurement itself broke
+        logger.warning("the pages of the scan could not be measured", exc_info=True)
+        error = f"{type(e).__name__}: {e}"
+        return {"verdict": "unchecked", "error": error, "reasons": [], "pages": []}, {}, {}, []
+    if all(q == ql.NO_IMAGE for q in measured):  # no page carries an image: not a scan of paper
+        return {}, {}, {}, []
+    pages: list[JSONObject] = []
+    skipped: dict[int, str] = {}
+    issues: dict[int, list[Issue]] = {}
+    notes: list[JSONObject] = []
+    for p, q in enumerate(measured, start=1):
+        if isinstance(q, str):  # not a page this check can judge: read the way it always was
+            pages.append({"page": p, "verdict": "unchecked", "reasons": [], "note": q})
+            continue
+        if isinstance(q, Exception):  # the measurement of this page broke (and logged it)
+            error = f"{type(q).__name__}: {q}"
+            pages.append({"page": p, "verdict": "unchecked", "reasons": [], "error": error})
+            continue
+        try:
+            verdict, why = ql.judge_page(q, lim)
+            info = {
+                "page": p,
+                "verdict": verdict,
+                "reasons": [r.to_json() for r in why],
+                "measures": q.to_json(),
+            }
+            found = [_scan_issue(r, p, lim) for r in why if r.severity in ("reject", "warn")]
+        except Exception as e:  # fault boundary: one page
+            logger.warning("page %d of the scan could not be judged", p, exc_info=True)
+            error = f"{type(e).__name__}: {e}"
+            pages.append({"page": p, "verdict": "unchecked", "reasons": [], "error": error})
+            continue
+        pages.append(info)
+        if found:
+            issues[p] = found
+        if verdict in ("empty", "reject"):
+            skipped[p] = verdict
+        if verdict == "empty":
+            notes.append(
+                {
+                    "page": p,
+                    "kind": "page_without_text",
+                    "text": f"No text was found on page {p}, so it was not read.",
+                    "source": "scan_quality",
+                }
+            )
+    kinds = {i["verdict"] for i in pages}
+    if len(skipped) == len(pages):
+        verdict = "reject"
+    elif kinds & {"reject", "warn"}:
+        verdict = "warn"
+    else:
+        verdict = "unchecked" if kinds == {"unchecked"} else "ok"
+    quality = {
+        "verdict": verdict,
+        "reasons": [r | {"page": i["page"]} for i in pages for r in i["reasons"]],
+        "pages": pages,
+        "limits": asdict(lim),
+    }
+    return quality, skipped, issues, notes
+
+
 # --------------------------------------------------------------------------- #
 # Whole document
 # --------------------------------------------------------------------------- #
@@ -540,8 +641,13 @@ async def process(
     layout_info: JSONObject = {"status": "off", "reason": "not a PDF"}
     quality: JSONObject = {}
     photo_issues: list[Issue] = []
+    skipped: dict[
+        int, str
+    ] = {}  # pages of a scan that are not sent to the model: "empty" | "reject"
+    scan_issues: dict[int, list[Issue]] = {}  # by page
+    scan_notes: list[JSONObject] = []
 
-    def failed(issues: list[Issue]) -> Result:
+    def failed(issues: list[Issue], notes: list[JSONObject] | None = None) -> Result:
         """Nothing was sent to a model: a result the caller can show, not a crash."""
         return Result(
             status="failed",
@@ -557,6 +663,7 @@ async def process(
             prompt_tokens=0,
             completion_tokens=0,
             quality=quality,
+            notes=notes or [],
         )
 
     try:
@@ -600,37 +707,62 @@ async def process(
                                 "text layer with coordinates is not available: "
                                 f"{type(e).__name__}: {e}"
                             )
+            if evidence is None and cfg.scan_quality:
+                # Before any request, as for a photo: a blank page costs a request for
+                # nothing, an unreadable one gets rows invented.
+                quality, skipped, scan_issues, scan_notes = _scan_quality(data, n, cfg)
             parts = [
                 file_part(extract_pages(data, [p]), mime, f"page{p}.pdf") for p in range(1, n + 1)
             ]
-            # The header is read from the first and the last page.
-            if n:
-                header_pages = [1, n] if n > 1 else [1]
+            # The header is read from the first and the last page that go to the model:
+            # [1, n] when none is left out.
+            sent = [p for p in range(1, n + 1) if p not in skipped]
+            if sent:
+                header_pages = [sent[0], sent[-1]] if len(sent) > 1 else sent
                 header_part = file_part(extract_pages(data, header_pages), mime, "header.pdf")
     except Exception as e:  # fault boundary: a damaged or unsupported file
         logger.warning("file cannot be read", exc_info=True)
         return failed([Issue("unreadable_file", f"{type(e).__name__}: {e}")])
     if quality.get("verdict") == "reject":
-        return failed(photo_issues)
+        if mime != "application/pdf":
+            return failed(photo_issues)
+        # A scan with no page left to read: every page that has text is too blurred, or no
+        # page has text at all.
+        unread = [i for p in sorted(scan_issues) for i in scan_issues[p]]
+        if not any(v == "reject" for v in skipped.values()):
+            unread.append(
+                Issue(
+                    "scan_no_text",
+                    "No page of the document has text. No request was sent.",
+                    severity="error",
+                )
+            )
+        return failed(unread, scan_notes)
 
     # The "carry_in" field is asked for only where a previous page can exist. A photo and
     # a one-page PDF keep the request they always had, to the byte.
     carry = cfg.carry_in and mime == "application/pdf" and n > 1
 
     async def one(p: int, announce: bool = True, with_carry: bool | None = None) -> PageResult:
-        try:
-            ask = carry if with_carry is None else with_carry
-            r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask)
-        except Exception as e:  # fault boundary: whatever breaks while reading one page
-            logger.warning("page %d could not be read", p, exc_info=True)
-            r = PageResult(p, issues=[Issue("page_read", f"{type(e).__name__}: {e}", page=p)])
+        if p in skipped:  # a page of a scan that is blank or too blurred to read: no request
+            r = PageResult(p, issues=list(scan_issues.get(p, [])), method="skipped")
+        else:
+            try:
+                ask = carry if with_carry is None else with_carry
+                r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask)
+            except Exception as e:  # fault boundary: whatever breaks while reading one page
+                logger.warning("page %d could not be read", p, exc_info=True)
+                issue = Issue("page_read", f"{type(e).__name__}: {e}", page=p)
+                r = PageResult(p, issues=[issue])
+            # A doubtful page of a scan: read as usual, flagged with its reason.
+            r.issues += scan_issues.get(p, [])
         if on_page and announce:
             on_page(r)
         return r
 
     layout_attempts: list[Attempt] = []
     layout_issues: list[Issue] = []
-    notes: list[JSONObject] = []
+    notes: list[JSONObject] = list(scan_notes)
     if text_pages is None or evidence is None:
         first, *rest = await asyncio.gather(
             read_header(client, header_part, cfg), *(one(p) for p in range(1, n + 1))

@@ -18,6 +18,9 @@ rectification the sheet fills the frame and there is no sheet edge to look at.
 
 `pipeline.process` calls `check` on every image before the first request
 (`Config.photo_quality`); the limits it passes are the `Config.photo_*` fields.
+Pages of a scanned PDF are measured by the second half of this module
+(`measure_pdf_pages`, `judge_page`, `ScanLimits`; `Config.scan_quality`, `Config.scan_*`):
+the same text and light numbers, without the sheet-on-a-desk part.
 
 The sharpness it decides on is `Quality.text_sharpness`, the variance of the
 Laplacian inside text regions divided by the squared paper brightness. A score of
@@ -31,15 +34,20 @@ plus artificially damaged copies of them. They are starting points, not
 calibrated thresholds; each one states what it rests on.
 """
 
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import cv2
 import numpy as np
 import numpy.typing as npt
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
 from PIL import Image
 
 from invoice_recognition.shapes import JSONObject
+
+logger = logging.getLogger(__name__)
 
 type Array = npt.NDArray[Any]
 
@@ -556,3 +564,249 @@ def check(img: Image.Image, lim: Limits | None = None) -> tuple[Quality, list[Re
     not that the photo is good."""
     q = measure(img)
     return q, reasons(q, lim)
+
+
+# --------------------------------------------------------------------------- #
+# A page of a scanned PDF
+# --------------------------------------------------------------------------- #
+#
+# The same numbers as for a photo, minus everything that is about a sheet lying on a desk:
+# the page of a scan IS the sheet, so there is no sheet edge to look for, no text "at the
+# frame edge" and no glare. What is left: is there text, how sharp is it, how dark is the
+# paper.
+#
+# The page is measured at the resolution of its own image ("as scanned"), not rendered to a
+# fixed one. Rendered to a width of 1600 px, a copy of a scan reduced to 0.3 of its
+# resolution scored 666 against 700 for the original - the renderer enlarges by repeating
+# pixels, and their steps count as sharpness. Measured at its own resolution the same copy
+# scores 67 against 809: on this scale low resolution and blur are one defect, "the letters
+# have no edges".
+
+SCAN_MAX_W = 3200  # px; a page image wider than this is measured at this width (time, not accuracy)
+
+
+@dataclass
+class ScanLimits:
+    """Where a number of a scanned page turns into a reason. Starting points measured on
+    the 20 pages of four synthetic scans that the cheap model reads well, and on damaged
+    copies of them; 0 switches a limit off."""
+
+    # `PageQuality.text_sharpness`. The 20 good pages: 734-987 (median 830). Blurred copies of
+    # one page (809 as scanned): 572 / 342 / 223 / 127 / 78 / 37 at a Gaussian radius of
+    # 0.5 / 0.8 / 1.0 / 1.25 / 1.5 / 2.0 px of a 110 dpi scan; copies reduced to 0.75 / 0.6 /
+    # 0.5 / 0.4 / 0.3 of the resolution: 586 / 415 / 282 / 157 / 67.
+    # That page, read by the model at each level of blur: 33 rows of 33 at 809, 572, 342,
+    # 223 and 127; the first wrong article number at 78; 19 of 33 at 36.5. Reject at 100
+    # holds (it is also below the score at which the model invented rows on photos, 108).
+    # Warn at 200: above it the model read every row, so a warning there was noise.
+    sharpness_reject: float = 100.0
+    sharpness_warn: float = 200.0
+    # The good pages are at 243-244; copies darkened x0.7 / x0.5 / x0.3 at 170 / 122 / 73.
+    # The same value as for photos; whether a dark scan is read worse was not measured.
+    paper_level: float = 150.0
+    # Text fainter than this share of the paper brightness on a page with no ink is not
+    # text: the print of the other side of the sheet showing through (0.04-0.08 at 10-20%
+    # opacity; real text 0.58-0.61, text blurred with a radius of 4 px 0.17).
+    min_contrast: float = 0.10
+    # A page with less than this share of clearly dark pixels is blank (blank copies and
+    # show-through: 0; pages with a table: 0.03-0.10; a page with ten lines of plain text: 0.015).
+    blank_ink: float = 0.001
+    min_boxes: int = 5
+
+
+@dataclass
+class PageQuality:
+    width: int  # of the image that was measured, px: the page at the resolution of its scan
+    height: int
+    density: float  # pixels per PDF point; x 72 = the resolution of the scan in dpi
+    text: Text
+    light: Light
+    ink: float  # share of the page clearly darker than its paper (below 0.8 of its brightness)
+
+    @property
+    def text_sharpness(self) -> float:
+        """The number the photo check decides on (`Quality.text_sharpness`), by the same code."""
+        sheet = Sheet(False, 1.0, {}, 0)
+        return Quality(self.width, self.height, sheet, self.text, self.light).text_sharpness
+
+    @property
+    def contrast(self) -> float:
+        """Ink against paper inside the text regions, as a share of the paper brightness."""
+        return self.text.contrast / self.light.paper_level if self.light.paper_level > 0 else 0.0
+
+    def to_json(self) -> JSONObject:
+        d = asdict(self) | {
+            "dpi": self.density * 72,
+            "text_sharpness": self.text_sharpness,
+            "contrast": self.contrast,
+        }
+        d["text"]["edge_margin"] = {
+            k: (None if v == float("inf") else v) for k, v in self.text.edge_margin.items()
+        }
+        out: JSONObject = _rounded(d)
+        return out
+
+
+def measure_page(img: Image.Image, density: float = 0.0) -> PageQuality:
+    """The numbers of one page image of a scan. No sheet is looked for: text and light are
+    measured over the whole page."""
+    text, light = find_text(img, None), find_light(img, None)
+    gray = _gray(img)
+    scale = 800 / max(gray.shape)
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=interp)
+    ink = float((small < 0.8 * light.paper_level).mean())
+    return PageQuality(img.width, img.height, float(density), text, light, ink)
+
+
+NO_IMAGE = "no image on the page: nothing to measure"
+NOT_ONLY_A_SCAN = (
+    "something visible is drawn besides the page image: the page is not measured as a scan"
+)
+
+
+def scan_page_image(page: Any, min_cover: float = 0.85) -> tuple[Image.Image, float] | str:
+    """A pypdfium2 page -> (the page in gray at the resolution of its scan, pixels per
+    point), or the reason why the page is not measured (NO_IMAGE, NOT_ONLY_A_SCAN).
+
+    Only a page that is nothing but a scan is measured: images, and at most text that is
+    not painted (the invisible layer an OCR program lays over a scan). Anything else that
+    is visible - printed text, lines, a form - may be the real content over a background
+    picture, and the pixels of the picture say nothing about it.
+
+    When one upright image covers the sheet (what a scanner writes), its stored pixels are
+    measured as they are. Otherwise the page is rendered at the pixel density of its
+    largest image. The two differ: a render that does not land on the stored pixels one to
+    one resamples them, and that alone moved the score of a page by up to 14%."""
+    w, h = page.get_size()
+    best = None  # (area on the page, pixels per point, the image)
+    for obj in page.get_objects():
+        if (
+            obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT
+            and pdfium_c.FPDFTextObj_GetTextRenderMode(obj.raw)
+            == pdfium_c.FPDF_TEXTRENDERMODE_INVISIBLE
+        ):
+            continue
+        # An image inside a form reports its place in the form, not on the page.
+        if obj.type != pdfium_c.FPDF_PAGEOBJ_IMAGE or obj.level > 0:
+            return NOT_ONLY_A_SCAN
+        left, bottom, right, top = obj.get_bounds()
+        bw, bh = right - left, top - bottom
+        if bw <= 0 or bh <= 0:
+            continue
+        pw, ph = obj.get_px_size()
+        if best is None or bw * bh > best[0]:
+            # Long side against long side: an image placed turned by 90 degrees measures the same.
+            best = (bw * bh, max(pw, ph) / max(bw, bh), obj)
+    if best is None or best[1] <= 0:
+        return NO_IMAGE
+    area, density, obj = best
+    a, b, c, d, _, _ = obj.get_matrix().get()
+    upright = (
+        page.get_rotation() == 0 and a > 0 and d > 0 and abs(b) < 1e-3 * a and abs(c) < 1e-3 * d
+    )
+    if upright and area >= min_cover * w * h:
+        try:
+            img: Image.Image = obj.get_bitmap(render=False).to_pil().convert("L")
+            if img.width > SCAN_MAX_W:
+                size = (SCAN_MAX_W, round(img.height * SCAN_MAX_W / img.width))
+                img = img.resize(size, Image.Resampling.BOX)
+            return img, density
+        # Fault boundary: an image this build cannot hand out as it is stored: render the
+        # page instead.
+        except Exception:
+            logger.warning("a page image could not be read as stored", exc_info=True)
+    # A hair under the density: the renderer rounds the size up, and one pixel more would
+    # resample every stored pixel.
+    scale = min(density * (1 - 1e-6), SCAN_MAX_W / w)
+    rendered: Image.Image = page.render(scale=scale).to_pil().convert("L")
+    return rendered, density
+
+
+def measure_pdf_pages(data: bytes) -> list[PageQuality | Exception | str]:
+    """One entry per page of the PDF: the numbers; the reason why the page is not measured
+    (NO_IMAGE, NOT_ONLY_A_SCAN); or the exception the measurement of that page ended with
+    (one page that breaks is that page's problem)."""
+    pdf = pdfium.PdfDocument(data)
+    out: list[PageQuality | Exception | str] = []
+    try:
+        for page in pdf:
+            try:
+                got = scan_page_image(page)
+                out.append(got if isinstance(got, str) else measure_page(*got))
+            except Exception as e:  # fault boundary: one page
+                logger.warning("a page of the scan could not be measured", exc_info=True)
+                out.append(e)
+    finally:
+        pdf.close()
+    return out
+
+
+def judge_page(q: PageQuality, lim: ScanLimits | None = None) -> tuple[str, list[Reason]]:
+    """Verdict and reasons for one page of a scan.
+
+      empty     - no text and no ink: a blank page or the back of a sheet (reason "no_text",
+                  severity "skip")
+      unchecked - no lines of text were found, but the page is not blank (a picture, a stamp,
+                  something this module cannot read as text): nothing to measure the
+                  sharpness on (reason "no_text_lines", "info")
+      reject    - text too blurred, or scanned at too low a resolution, to be read ("blurred",
+                  "reject")
+      warn      - doubtful: "blurred" or "dark", severity "warn"
+      ok        - no defect was measured - not "the page is good"
+
+    The reasons of a photo that are about a sheet on a desk (text_at_edge, sheet_cut,
+    sheet_edge_unseen, glare) do not exist here."""
+    lim = lim or ScanLimits()
+    t, light = q.text, q.light
+    blank = q.ink < lim.blank_ink
+    has_text = t.boxes >= lim.min_boxes and not (blank and q.contrast < lim.min_contrast)
+    if not has_text:
+        if blank:
+            reason = Reason(
+                "no_text",
+                "No text was found on the page: the page was not read.",
+                "skip",
+                float(t.boxes),
+            )
+            return "empty", [reason]
+        reason = Reason(
+            "no_text_lines",
+            "No lines of text were found on the page, but it is not blank: "
+            "its quality was not assessed.",
+            "info",
+            float(t.boxes),
+        )
+        return "unchecked", [reason]
+    out: list[Reason] = []
+    sharp = q.text_sharpness
+    if lim.sharpness_reject and sharp < lim.sharpness_reject:
+        out.append(
+            Reason(
+                "blurred",
+                "The page is blurred or scanned at too low a resolution: the text cannot be "
+                "read reliably. Please scan it again.",
+                "reject",
+                round(sharp, 1),
+            )
+        )
+    elif lim.sharpness_warn and sharp < lim.sharpness_warn:
+        out.append(
+            Reason(
+                "blurred",
+                "The page is not sharp: the values read from it may contain errors.",
+                "warn",
+                round(sharp, 1),
+            )
+        )
+    if lim.paper_level and 0 < light.paper_level < lim.paper_level:
+        out.append(
+            Reason(
+                "dark",
+                "The page is dark: the values read from it may contain errors.",
+                "warn",
+                round(light.paper_level, 1),
+            )
+        )
+    verdict = "reject" if any(r.severity == "reject" for r in out) else ("warn" if out else "ok")
+    return verdict, out

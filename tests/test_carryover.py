@@ -180,6 +180,11 @@ def test_tails_without_an_owner() -> None:
         {"page": 2, "rows": [item(2)], "carry_in": "tail"},
     ]
     assert reasons(unread) == [(2, co.ORPHAN, "Page 1 could not be read in full.")]
+    skipped: list[JSONObject] = [
+        {"page": 1, "rows": [], "carry_in": "", "skipped": True},
+        {"page": 2, "rows": [item(2)], "carry_in": "tail"},
+    ]
+    assert reasons(skipped) == [(2, co.ORPHAN, "Page 1 was not sent to the model.")]
     empty: list[JSONObject] = [
         {"page": 1, "rows": [], "carry_in": ""},
         {"page": 2, "rows": [item(2)], "carry_in": "tail"},

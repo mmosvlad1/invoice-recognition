@@ -44,3 +44,20 @@ class Config:
     photo_text_margin_cut: float = 1.5
     # No sheet edge visible at all: text this close to the frame border rejects.
     photo_text_margin_unseen: float = 0.5
+    # Scan (a PDF read page by page because it has no text layer of its own): every page
+    # that is nothing but a scan - images, and at most an invisible OCR text layer - is
+    # measured before any request (quality.judge_page), at the resolution of the scan
+    # itself. Other pages are read as before.
+    #   no text and no ink   - the page is not sent; a note "page_without_text", no issue
+    #   "reject"             - the page is not sent; issue scan_blurred (severity "error")
+    #   "warn"               - the page is read as usual; issue scan_<code> ("warning")
+    #   no page left to read - "failed", no request at all (not even for the header)
+    scan_quality: bool = True  # False: no measurement, every page goes to the model
+    # The limits below are quality.ScanLimits under the same names; their basis is stated
+    # there. 0 switches a limit off.
+    scan_sharpness_reject: float = 100.0  # the 20 pages of four good scans: 734-987
+    scan_sharpness_warn: float = 200.0  # pages at 342 and 223 were still read without a mistake
+    scan_paper_level: float = 150.0  # paper darker than this (0-255): warn "dark"
+    # Fainter "text" on a page with no ink is the other side showing through: not text.
+    scan_min_contrast: float = 0.10
+    scan_blank_ink: float = 0.001  # less than this share of the page is clearly dark: blank

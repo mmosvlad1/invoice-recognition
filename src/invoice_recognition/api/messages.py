@@ -34,6 +34,8 @@ INVALID_REQUEST = (
     "The request is missing something or has a value that is not valid. "
     "The list of errors says which."
 )
+# A body over the limit of a route that takes no file.
+BODY_TOO_LARGE = "The request body is too large."
 HTTP_ERROR = "The request could not be completed."
 INTERNAL_ERROR = "Something went wrong on the server. The error has been logged."
 

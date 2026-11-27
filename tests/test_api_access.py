@@ -188,6 +188,8 @@ async def test_the_documentation_offers_the_code_on_the_invoice_routes_only() ->
         ("/invoices", "post"),
         ("/invoices/{job_id}", "get"),
         ("/invoices/{job_id}/file", "get"),
+        ("/invoices/{job_id}/issues/{issue_id}/resolution", "put"),
+        ("/invoices/{job_id}/issues/{issue_id}/resolution", "delete"),
     }
     assert "401" in schema["paths"]["/invoices"]["get"]["responses"]
 

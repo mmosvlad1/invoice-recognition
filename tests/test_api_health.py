@@ -27,6 +27,7 @@ async def test_the_documentation_is_served() -> None:
         "/invoices",
         "/invoices/{job_id}",
         "/invoices/{job_id}/file",
+        "/invoices/{job_id}/issues/{issue_id}/resolution",
     ]
 
 

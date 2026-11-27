@@ -133,7 +133,8 @@ async def test_a_working_route_is_not_touched() -> None:
     [
         (400, "invalid_request", messages.BAD_REQUEST),
         (401, "unauthorized", messages.UNAUTHORIZED),
-        (413, "file_too_large", "The file is larger than the limit of 10 MB."),
+        # Not the upload: its body is no file (the upload's own 413 is in test_api_upload).
+        (413, "body_too_large", messages.BODY_TOO_LARGE),
         (418, "http_error", messages.HTTP_ERROR),
     ],
 )

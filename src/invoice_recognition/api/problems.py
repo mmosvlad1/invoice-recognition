@@ -13,7 +13,8 @@ the schema, and anything else that escapes a route (500, logged).
 
 The one exception: a body whose declared Content-Length is over the size limit is
 refused by the framework before any handler runs, as plain text ("Content Too Large",
-413). Clients rely on the status code there.
+413). Clients rely on the status code there. A body over the limit sent in chunks is
+a problem: file_too_large on the upload route, body_too_large on any other.
 """
 
 import logging
@@ -117,7 +118,7 @@ async def _api_error(request: Request, exc: ApiError) -> Response:
     return problem_response(exc.status, exc.code, exc.detail, exc.headers, extra=exc.extra)
 
 
-def _http_error(max_file_bytes: int) -> Handler:
+def _http_error(max_file_bytes: int, upload_path: str) -> Handler:
     # The errors the framework raises itself, by status: (code, detail).
     known = {
         400: ("invalid_request", messages.BAD_REQUEST),
@@ -134,12 +135,22 @@ def _http_error(max_file_bytes: int) -> Handler:
 
     async def handle(request: Request, exc: HTTPException) -> Response:
         code, detail = known.get(exc.status_code, ("http_error", messages.HTTP_ERROR))
+        if exc.status_code == 413 and not _uploading(request, upload_path):
+            # Only an upload's body is a file: any other is refused as what it is.
+            code, detail = "body_too_large", messages.BODY_TOO_LARGE
         # The Allow header of a 405 and any other header the framework set are kept.
         return problem_response(
             exc.status_code, code, detail.format(method=request.method), exc.headers
         )
 
     return handle
+
+
+def _uploading(request: Request, upload_path: str) -> bool:
+    """Whether the request was routed to the upload: POST on `upload_path` (the route's
+    own path, whatever root path the app is served under)."""
+    route = request.scope.get("route")
+    return request.method == "POST" and getattr(route, "path", None) == upload_path
 
 
 async def _invalid_request(request: Request, exc: RequestValidationError) -> Response:
@@ -157,12 +168,13 @@ async def _internal_error(request: Request, exc: Exception) -> Response:
     return problem_response(500, "internal_error", messages.INTERNAL_ERROR)
 
 
-def handlers(*, max_file_bytes: int) -> dict[int | type[Exception], Handler]:
+def handlers(*, max_file_bytes: int, upload_path: str) -> dict[int | type[Exception], Handler]:
     """The exception handlers of the app (FastAPI(exception_handlers=...)).
-    max_file_bytes: the size limit of an uploaded file, named when a body is too large."""
+    max_file_bytes: the size limit of an uploaded file, named when an upload's body is too
+    large; upload_path: the path of the upload route (POST)."""
     return {
         ApiError: _api_error,
-        HTTPException: _http_error(max_file_bytes),
+        HTTPException: _http_error(max_file_bytes, upload_path),
         RequestValidationError: _invalid_request,
         Exception: _internal_error,
     }

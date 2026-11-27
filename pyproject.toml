@@ -12,6 +12,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "ruff>=0.17.6",
 ]
 
 [build-system]
@@ -25,3 +26,9 @@ required-version = ">=0.13.10"
 strict = true
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib", "-ra"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["FAST"]

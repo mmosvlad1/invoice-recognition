@@ -14,6 +14,12 @@ the layout of the table once, code reads the rows of every page from the text
 layer, and the model reads one page the usual way as a witness. Pages are
 checked exactly as above; a page that fails is read by the model, and so is
 the whole document if the layout cannot be used or the witness disagrees.
+
+A line item cut by a page break (carryover.py): in a PDF of more than one page the
+answer of a page read by the model has one more field, "carry_in", for the end of a
+description printed at the top of the page. When all pages are read, code appends it
+to the last line item of the previous page. What was joined, and what found no row to
+go to, is in Result.notes; it raises no issue.
 """
 
 import asyncio
@@ -33,6 +39,7 @@ from invoice_recognition.llm import (
     parse_json,
     salvage_lines,
 )
+from invoice_recognition.recognition import carryover as co
 from invoice_recognition.recognition import checks
 from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
@@ -169,24 +176,33 @@ async def read_page(
     evidence: ev.Evidence | None,
     cfg: Config,
     sem: asyncio.Semaphore,
+    carry: bool = False,
 ) -> PageResult:
     """Read one page, once per entry of cfg.page_models until an attempt passes its
     checks, and keep the best attempt.
 
     Issues of the returned page index its own lines (0-based within the page);
-    process() shifts them to document positions."""
+    process() shifts them to document positions.
+
+    carry=True: the page is asked with the "carry_in" field (carryover.py);
+    PageResult.carry_in is the field of the attempt that is kept. carry=False:
+    EXTRACT_PAGE, to the byte."""
     best: PageResult | None = None
     best_key: tuple[bool, int, int] = (True, 0, 0)
     attempts: list[Attempt] = []
     counts: list[int] = []  # lines per attempt, for the attempts that were read cleanly
-    prompt = EXTRACT_PAGE.format(page=page, total=total)
+    prompt = co.carry_prompt(page, total) if carry else EXTRACT_PAGE.format(page=page, total=total)
     for model in cfg.page_models:
         async with sem:
             res = await _call(client, model, prompt, part, cfg.page_max_tokens, cfg.page_timeout_s)
         parsed = parse_json(res.text)
         rows = (parsed or {}).get("rows")
+        tail = ""
         if rows is None:  # broken or cut-off answer: keep whatever complete rows it has
             rows = salvage_lines(res.text)
+        elif carry and parsed is not None and isinstance(parsed.get("carry_in"), str):
+            # Not taken from a salvaged answer; anything but a string is no tail.
+            tail = co.carry_text(parsed["carry_in"])
         rows = rows if isinstance(rows, list) else []
         lines, totals = rows_to_page(rows, page)
         fixed = repair(lines)
@@ -217,7 +233,7 @@ async def read_page(
                 )
             )
         attempts.append(_attempt(res, len(lines), len(issues)))
-        cand = PageResult(page, lines, totals, issues, [], fixed)
+        cand = PageResult(page, lines, totals, issues, [], fixed, carry_in=tail)
         # A clean read beats a failed one, then fewer issues, then more lines; on a tie the
         # earlier attempt stays. Counting issues alone let an emptier answer win.
         key = (failed, len(issues), -len(lines))
@@ -354,6 +370,63 @@ def _page_key(pr: PageResult) -> tuple[bool, int, int]:
 
 
 # --------------------------------------------------------------------------- #
+# A description that goes on at the top of the next page
+# --------------------------------------------------------------------------- #
+
+
+def join_carried(pages: list[PageResult]) -> list[JSONObject]:
+    """Append every PageResult.carry_in to the description of the last line item of the
+    previous page, in place, by the rules of carryover.join_carry: nothing is touched
+    when that page ends with a control total, has no rows, was not read, or there is no
+    previous page. Returns the notes for Result.notes ("line" indexes Result.lines).
+
+    A page that kept a "page_read" issue owns nothing: its answer failed or was cut off,
+    so its last row is not known to be the last row printed. A page found by code already
+    has the text when the layout parser joined it across the break: it is not appended
+    twice."""
+    entries: list[JSONObject] = [
+        {
+            "page": pr.page,
+            "rows": co.flow_rows(pr.lines, pr.totals),
+            "carry_in": pr.carry_in,
+            "unread": any(i.check == "page_read" for i in pr.issues),
+            "joined_by_code": pr.method == "layout",
+        }
+        for pr in pages
+    ]
+    joined, found = co.join_carry(entries)
+    rows = {p["page"]: p["rows"] for p in joined}
+    by_page = {pr.page: pr for pr in pages}
+    first, done = {}, 0  # index of the first line of each page within the document
+    for pr in pages:
+        first[pr.page] = done
+        done += len(pr.lines)
+    notes: list[JSONObject] = []
+    for f in found:
+        note: JSONObject = {
+            "page": f["page"],
+            "kind": f["kind"],
+            "text": f["text"],
+            "source": "carry_in",
+        }
+        if "to_page" in f:
+            # The owner is the last row of that page and a line item: owner.lines[-1].
+            owner = by_page[f["to_page"]]
+            if f["kind"] == co.JOINED:
+                owner.lines[-1]["description"] = rows[f["to_page"]][f["row"]]["description"]
+            note |= {
+                "to_page": f["to_page"],
+                "line": first[f["to_page"]] + len(owner.lines) - 1,
+                "line_no": f["line_no"],
+                "sku": f["sku"],
+            }
+        else:
+            note["reason"] = f["reason"]
+        notes.append(note)
+    return notes
+
+
+# --------------------------------------------------------------------------- #
 # Whole document
 # --------------------------------------------------------------------------- #
 
@@ -446,9 +519,14 @@ async def process(
         logger.warning("file cannot be read", exc_info=True)
         return failed([Issue("unreadable_file", f"{type(e).__name__}: {e}")])
 
-    async def one(p: int, announce: bool = True) -> PageResult:
+    # The "carry_in" field is asked for only where a previous page can exist. A photo and
+    # a one-page PDF keep the request they always had, to the byte.
+    carry = cfg.carry_in and mime == "application/pdf" and n > 1
+
+    async def one(p: int, announce: bool = True, with_carry: bool | None = None) -> PageResult:
         try:
-            r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem)
+            ask = carry if with_carry is None else with_carry
+            r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask)
         except Exception as e:  # fault boundary: whatever breaks while reading one page
             logger.warning("page %d could not be read", p, exc_info=True)
             r = PageResult(p, issues=[Issue("page_read", f"{type(e).__name__}: {e}", page=p)])
@@ -471,8 +549,9 @@ async def process(
         wp = next((p.number for p in evidence.pages if p.item_rows), 1)
 
         async def witness() -> PageResult | None:
-            # The witness is compared with the rows found by code, nothing more.
-            return await one(wp, announce=False) if cfg.layout_witness else None
+            # The witness request is not changed: EXTRACT_PAGE. It is compared with the rows
+            # found by code, nothing more.
+            return await one(wp, announce=False, with_carry=False) if cfg.layout_witness else None
 
         (header, header_attempts), (raw, layout_attempts, error), seen = await asyncio.gather(
             read_header(client, header_part, cfg),
@@ -562,6 +641,17 @@ async def process(
         "pages_layout": sum(1 for p in pages if p.method == "layout"),
         "pages_model": sum(1 for p in pages if p.method == "model"),
     }
+    if carry:
+        # Every page is read and its best attempt chosen; the lines are not concatenated
+        # or checked as a document yet.
+        try:
+            notes = notes + join_carried(pages)
+        except Exception as e:  # fault boundary: a bug here costs the tails, not the document
+            logger.warning("descriptions carried over a page break were not joined", exc_info=True)
+            failure = f"{type(e).__name__}: {e}"
+            notes = notes + [
+                {"page": None, "kind": "carry_join_failed", "text": failure, "source": "carry_in"}
+            ]
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []

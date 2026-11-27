@@ -22,3 +22,8 @@ class Config:
     layout_witness: bool = True
     layout_model: str = FAST
     layout_max_tokens: int = 900
+    # A PDF of more than one page: a page read by the model is asked with the "carry_in"
+    # field (carryover.py) and code joins the tail to the last line item of the previous
+    # page. A photo, a one-page PDF and the witness page of the layout road are asked with
+    # EXTRACT_PAGE as before. False: EXTRACT_PAGE everywhere, no join.
+    carry_in: bool = True

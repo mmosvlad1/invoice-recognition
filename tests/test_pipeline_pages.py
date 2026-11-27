@@ -6,10 +6,11 @@ import httpx
 import pytest
 
 from invoice_recognition.recognition import pipeline as pl
+from invoice_recognition.recognition.carryover import carry_prompt
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.evidence import Evidence
-from invoice_recognition.recognition.prompts import EXTRACT_HEADER, EXTRACT_PAGE
+from invoice_recognition.recognition.prompts import EXTRACT_HEADER
 from invoice_recognition.shapes import Checkpoint, Line
 
 from fakes import Server, codes, header_for, line, make_pdf, never, recording, run, scan, sse
@@ -203,7 +204,7 @@ def test_header_is_read_from_the_first_and_the_last_page() -> None:
     files = {b["messages"][0]["content"][1]["file"]["filename"] for b in bodies}
     assert files == {"header.pdf", "page1.pdf", "page2.pdf", "page3.pdf"}
     pages = [b["messages"][0]["content"][0]["text"] for b in bodies if b is not bodies[0]]
-    assert pages == [EXTRACT_PAGE.format(page=p, total=3) for p in (1, 2, 3)]
+    assert pages == [carry_prompt(p, 3) for p in (1, 2, 3)]
     assert bodies[0]["messages"][0]["content"][0]["text"] == EXTRACT_HEADER
 
 

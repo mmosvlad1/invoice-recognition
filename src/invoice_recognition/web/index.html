@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="color-scheme" content="light dark">
+  <title>Invoice reader</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/js/app.mjs"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.75h8.5L19.25 7.5V21.25H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 11h7M9 14.5h7M9 18h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>Invoice reader</span>
+    </a>
+    <span class="topbar-note">Reads supplier invoices into rows and checks the numbers</span>
+  </header>
+  <div class="banner" id="connection" role="status" hidden>Lost the connection to the server. Trying again…</div>
+
+  <main id="view" tabindex="-1"></main>
+  <div class="visually-hidden" id="live" aria-live="polite"></div>
+
+  <dialog id="access" aria-labelledby="access-title">
+    <form id="access-form" novalidate>
+      <h2 id="access-title">Access code</h2>
+      <p class="muted">This page is shared by a few people and asks for the code you were given. It is kept for this tab only.</p>
+      <label for="access-code">Access code</label>
+      <input id="access-code" type="password" autocomplete="off" spellcheck="false" autocapitalize="off">
+      <p class="field-error" id="access-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-secondary" id="access-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="tpl-home">
+    <section class="home">
+      <div class="upload-card">
+        <div class="dropzone" id="dropzone">
+          <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 14v4.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <p class="drop-title">Drop an invoice here</p>
+          <p class="drop-sub">PDF, JPEG or PNG · up to 10 MB and 50 pages</p>
+          <label class="btn btn-primary" for="file-input">Choose a file</label>
+          <input type="file" id="file-input" class="visually-hidden" accept="application/pdf,image/jpeg,image/png">
+          <p class="upload-error" id="upload-error" role="alert" hidden></p>
+        </div>
+
+        <div class="samples">
+          <p class="samples-note">Generated test invoices; the scan and the photo are simulated from them; the small PDF has one amount misprinted on purpose.</p>
+          <p class="samples-label">No invoice at hand? Try a sample:</p>
+          <div class="sample-buttons">
+            <button class="btn btn-secondary" type="button" data-sample="small">Small PDF <span class="muted">4 pages · one misprinted amount</span></button>
+            <button class="btn btn-secondary" type="button" data-sample="large">Large PDF <span class="muted">34 pages</span></button>
+            <button class="btn btn-secondary" type="button" data-sample="scan">Scan (simulated) <span class="muted">4 pages</span></button>
+            <button class="btn btn-secondary" type="button" data-sample="photo">Photo (simulated)</button>
+          </div>
+        </div>
+
+        <div class="privacy" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 9v5M10 6.2v.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <p><strong>Before you upload:</strong> everyone who has the access code can see and download every uploaded document.
+            Files are sent to a third-party AI model provider (through OpenRouter) to be read. Do not upload anything confidential.</p>
+        </div>
+      </div>
+
+      <section class="doclist" aria-labelledby="doclist-title">
+        <div class="section-head">
+          <h2 id="doclist-title">Documents</h2>
+          <span class="muted" id="doclist-count"></span>
+        </div>
+        <div id="doclist-body"></div>
+      </section>
+    </section>
+  </template>
+</body>
+</html>

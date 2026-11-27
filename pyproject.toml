@@ -59,7 +59,7 @@ extend-select = ["FAST"]
 
 [tool.ruff.lint.isort]
 # Shared test helpers, imported as top-level modules through pytest's pythonpath.
-known-local-folder = ["boxes_help", "drawn", "fakes", "golden_cases", "samples"]
+known-local-folder = ["boxes_help", "demo_server", "drawn", "fakes", "golden_cases", "samples"]
 
 [tool.mypy]
 strict = true

@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 type Array = npt.NDArray[Any]
 
+# The longest side of a photo sent to the model, in pixels. Every photo the model was
+# measured on is at most 1600 x 2134; a phone photo (12-48 megapixels, 4000-8000 px on the
+# long side) is brought into that range instead of being sent at a size nothing was
+# measured on, and at several times the upload. Smaller photos are not enlarged.
+MAX_SIDE = 2400
+
 
 def load(data: bytes) -> Image.Image:
     """The photo upright, as taken: what the quality check measures and what is then
@@ -89,11 +95,17 @@ def rectify(img: Image.Image) -> Image.Image:
 
 
 def part(img: Image.Image) -> ContentPart:
-    """The photo as a content part of a request: flattened, as a JPEG."""
+    """The photo as a content part of a request: flattened, no longer than MAX_SIDE on its
+    long side, as a JPEG."""
     try:
         img = rectify(img)
     except Exception:  # fault boundary: a photo that cannot be flattened is sent as it is
         logger.warning("the photo could not be flattened", exc_info=True)
+    rgb = img.convert("RGB")
+    if max(rgb.size) > MAX_SIDE:
+        f = MAX_SIDE / max(rgb.size)
+        size = (max(1, round(rgb.width * f)), max(1, round(rgb.height * f)))
+        rgb = rgb.resize(size, Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=92)
+    rgb.save(buf, "JPEG", quality=92)
     return file_part(buf.getvalue(), "image/jpeg")

@@ -97,6 +97,9 @@ const json = async (path, init) => (await request(path, init)).json();
 export const list = () => json("/invoices");
 export const get = (id) => json(`/invoices/${id}`);
 
+/** The uploaded file, as a Blob: fetched with the code, never by URL. */
+export const file = async (id) => (await request(`/invoices/${id}/file`)).blob();
+
 /** Upload a file; the accepted job. Too large: refused here, nothing is sent. */
 export async function upload(file) {
   if (file.size > MAX_UPLOAD_BYTES) throw new Problem(413, "file_too_large", TOO_LARGE);

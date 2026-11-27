@@ -148,3 +148,69 @@ test("the rows that passed: one, several, every one, none", () => {
   assert.equal(model.passedNote(110, 109, true), "The other 109 rows passed every check.");
   assert.equal(model.passedNote(3, 0, false), "");
 });
+
+// ------------------------------------------------------------------ where an issue points
+
+// An A4 page (595 x 842 points) with two located lines and one that was not located.
+const PAGE = { page: 1, method: "layout", line_count: 3, repaired_count: 0, width: 595, height: 842, text_layer: true };
+const boxes = (top) => ({
+  row: [40, top, 555, top + 14], line_no: null, sku: [40, top, 90, top + 10], description: [100, top, 300, top + 10],
+  quantity: [310, top, 340, top + 10], unit: null, unit_price: [400, top, 440, top + 10], tax_rate: null, amount: [500, top, 555, top + 10],
+});
+const PLACED = {
+  pages: [PAGE, { page: 2, width: null, height: null }],
+  lines: [
+    { index: 0, page: 1, boxes: boxes(100) },
+    { index: 1, page: 1, boxes: boxes(421) },
+    { index: 2, page: 1, boxes: null },
+    { index: 3, page: 2, boxes: boxes(100) },
+  ],
+};
+const A4 = [[595, 842], [595, 842]];
+const lineIssue = (line_index, fields, page = 1) => ({ id: 9, line_index, page, fields });
+const close = (box, expected) => {
+  for (const [key, v] of Object.entries(expected)) assert.ok(Math.abs(box[key] - v) < 1e-9, `${key}: ${box[key]} != ${v}`);
+};
+
+test("a value in doubt is framed in percent of its page", () => {
+  const t = model.target(lineIssue(1, ["line.amount"]), PLACED, A4);
+  assert.equal(t.page, 1);
+  assert.equal(t.frames.length, 1);
+  close(t.frames[0], { left: (500 / 595) * 100, top: 50, width: (55 / 595) * 100, height: (10 / 842) * 100 });
+  assert.equal(t.band, null);
+  assert.equal(model.target(lineIssue(1, ["line.quantity", "line.unit_price", "line.amount"]), PLACED, A4).frames.length, 3);
+});
+
+test("a value without a rectangle falls back to the row, a line without boxes to the page", () => {
+  const unit = model.target(lineIssue(1, ["line.unit"]), PLACED, A4);
+  assert.deepEqual(unit.frames, []);
+  close(unit.band, { top: 50, left: (40 / 595) * 100 });
+  assert.deepEqual(model.target(lineIssue(2, ["line.amount"]), PLACED, A4), { page: 1, frames: [], band: null });
+});
+
+test("no frame where the page's shape differs or its size is unknown", () => {
+  const letter = [[612, 792]];
+  assert.deepEqual(model.target(lineIssue(1, ["line.amount"]), PLACED, letter), { page: 1, frames: [], band: null });
+  assert.equal(model.framesAllowed(PLACED, 1, [[595 * 1.004, 842]]), true); // within 0.5 %
+  assert.equal(model.framesAllowed(PLACED, 1, [[595 * 1.006, 842]]), false);
+  assert.equal(model.framesAllowed(PLACED, 1, [[595 * 2, 842 * 2]]), true); // /UserUnit: same shape
+  assert.deepEqual(model.target(lineIssue(3, ["line.amount"], 2), PLACED, A4), { page: 2, frames: [], band: null });
+  assert.equal(model.framesAllowed({ pages: [{ page: 1 }] }, 1, A4), false); // before page sizes reach the API
+});
+
+test("issues of a page, of the header or of nothing point at their page or nowhere", () => {
+  assert.deepEqual(model.target({ id: 1, line_index: null, page: 2, fields: [] }, PLACED, A4), { page: 2, frames: [], band: null });
+  assert.deepEqual(model.target({ id: 2, line_index: null, page: null, fields: ["header.subtotal"] }, PLACED, A4), null);
+  const odd = structuredClone(PLACED);
+  odd.lines[1].boxes.amount = [500, 421, "x", 431];
+  assert.equal(model.target(lineIssue(1, ["line.amount"]), odd, A4).frames.length, 0);
+});
+
+test("the row under a point of the document", () => {
+  assert.equal(model.lineAt(PLACED, 1, 10, A4).index, 0); // above every row: the page's first
+  assert.equal(model.lineAt(PLACED, 1, 30, A4).index, 0);
+  assert.equal(model.lineAt(PLACED, 1, 60, A4).index, 1);
+  assert.equal(model.lineAt(PLACED, 2, 60, A4).index, 3); // no sizes for page 2: its first line
+  assert.equal(model.lineAt(PLACED, 3, 60, A4), null);
+  assert.equal(model.rowBox(PLACED.lines[2], PLACED, A4), null);
+});

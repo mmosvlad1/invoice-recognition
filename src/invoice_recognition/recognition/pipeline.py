@@ -26,6 +26,13 @@ A photo (any file that is not a PDF) is measured before the first request
 "failed" with the reason and no request; a doubtful one is read and carries the
 reason as an issue.
 
+Where each value is printed (boxes.py): for a PDF with its own text layer, every line
+item gets the rectangles of its printed values on its page, as the page is displayed -
+from the cells the layout parser cut, or, for a page read by the model, found in the text
+layer afterwards. Scans and photos get the page only. This runs on the lane after the
+reading, and never changes a value, an issue, a status or a request: a failure there
+costs the rectangles, nothing else.
+
 A scanned PDF (no text layer, or page images with somebody's OCR text over them) is
 measured page by page before the first request, by the same numbers minus what is about
 a sheet on a desk (quality.judge_page). A page without text is not sent and leaves a
@@ -56,6 +63,7 @@ from invoice_recognition.llm import (
     parse_json,
     salvage_lines,
 )
+from invoice_recognition.recognition import boxes as bx
 from invoice_recognition.recognition import carryover as co
 from invoice_recognition.recognition import checks, photo
 from invoice_recognition.recognition import evidence as ev
@@ -796,6 +804,131 @@ def _scan_quality(
 
 
 # --------------------------------------------------------------------------- #
+# Where each value is printed
+# --------------------------------------------------------------------------- #
+
+
+def _page_frames(data: bytes) -> list[bx.PageFrame | None]:
+    """boxes.page_frames, [] when the page boxes cannot be read: nothing is framed then."""
+    try:
+        return bx.page_frames(data)
+    except Exception:  # fault boundary: the rectangles are extra output
+        logger.warning("page boxes could not be read; nothing will be framed", exc_info=True)
+        return []
+
+
+def _layout_boxes(
+    parsed: lay.Parsed, layout: lay.Layout, frames: list[bx.PageFrame | None]
+) -> dict[int, list[bx.LineBoxes | None]]:
+    """The rectangles of the line items found by code, by page in the order of each page's
+    lines; {} when they cannot be worked out."""
+    try:
+        found = bx.from_layout(parsed, layout, frames)
+        by_page: dict[int, list[bx.LineBoxes | None]] = {}
+        for item, b in zip(parsed.lines, found, strict=True):
+            by_page.setdefault(item["page"], []).append(b)
+    except Exception:  # fault boundary: the rectangles are extra output
+        logger.warning("cells of the rows found by code could not be framed", exc_info=True)
+        return {}
+    return by_page
+
+
+def _located(pages: list[PageResult], prep: Prepared) -> dict[int, list[bx.LineBoxes | None]]:
+    """The lines of the pages the model read, looked up in the text layer, by page. All
+    such pages at once: a page that holds one line checks it against the columns of the
+    others. If that breaks, page by page: a page that breaks has no entry."""
+    model = [pr for pr in pages if pr.method == "model" and pr.lines]
+    if not model or prep.evidence is None or not prep.text_pages:
+        return {}
+    text_pages, frames = prep.text_pages, prep.frames
+    try:
+        found = bx.locate([item for pr in model for item in pr.lines], text_pages, frames)
+        out: dict[int, list[bx.LineBoxes | None]] = {}
+        for pr in model:
+            out[pr.page], found = found[: len(pr.lines)], found[len(pr.lines) :]
+        return out
+    except Exception:  # fault boundary: all pages; tried again one by one
+        logger.warning("lines could not be located together; page by page", exc_info=True)
+    out = {}
+    for pr in model:
+        try:
+            out[pr.page] = bx.locate(pr.lines, text_pages, frames)
+        except Exception:  # fault boundary: one page
+            logger.warning("lines of page %d could not be located", pr.page, exc_info=True)
+    return out
+
+
+def _page_boxes(
+    pr: PageResult,
+    code: dict[int, list[bx.LineBoxes | None]],
+    located: dict[int, list[bx.LineBoxes | None]],
+) -> list[bx.LineBoxes | None]:
+    """The rectangles of the lines of one page: of its cells for a page found by code,
+    looked up in the text layer for a page the model read, None for anything else."""
+    found: list[bx.LineBoxes | None] = [None] * len(pr.lines)
+    if pr.method == "layout" and pr.page in code:
+        found = code[pr.page]
+    elif pr.method == "model" and pr.page in located:
+        found = located[pr.page]
+    if len(found) != len(pr.lines):
+        raise ValueError(f"page {pr.page}: {len(found)} boxes for {len(pr.lines)} lines")
+    return found
+
+
+def _line_boxes(
+    pages: list[PageResult], prep: Prepared, by_code: tuple[lay.Parsed, lay.Layout] | None
+) -> list[bx.LineBoxes | None]:
+    """Where each line of the document is printed, parallel to the lines of `pages` taken
+    in order (see _page_boxes); whatever cannot be worked out gets None - a page that
+    breaks costs its own rectangles only. by_code: what the layout road read, when its
+    pages were kept. Pure Python, bounded by lines x rows of a page: run on the lane."""
+    total = sum(len(pr.lines) for pr in pages)
+    try:
+        code = _layout_boxes(*by_code, prep.frames) if by_code is not None else {}
+        located = _located(pages, prep)
+        out: list[bx.LineBoxes | None] = []
+        for pr in pages:
+            try:
+                out += _page_boxes(pr, code, located)
+            except Exception:  # fault boundary: one page
+                logger.warning("lines of page %d could not be framed", pr.page, exc_info=True)
+                out += [None] * len(pr.lines)
+    except Exception:  # fault boundary: the rectangles are extra output
+        logger.warning("lines could not be located on their pages", exc_info=True)
+        return [None] * total
+    return out
+
+
+async def _frame_lines(
+    pages: list[PageResult],
+    prep: Prepared,
+    by_code: tuple[lay.Parsed, lay.Layout] | None,
+    lane: Executor | None,
+    gate: Gate,
+) -> list[bx.LineBoxes | None]:
+    """_line_boxes on the lane, as prepare() runs (None: on the calling thread). Bounded
+    by the document's deadline: when it has passed, or passes while the lane is busy or
+    working, the document is kept as read and its lines are left without rectangles.
+
+    Work already started on the lane cannot be cancelled: when the deadline passes during
+    locating, that work still runs to its end and holds the lane meanwhile, so the next
+    document's local work waits for it (up to 1.5 s in the review's worst case, a page of
+    6,000 text lines with 3,000 lines read)."""
+    total = sum(len(pr.lines) for pr in pages)
+    if gate.passed():
+        logger.warning("the time limit passed before the lines could be located")
+        return [None] * total
+    if lane is None:
+        return _line_boxes(pages, prep, by_code)
+    work = asyncio.get_running_loop().run_in_executor(lane, _line_boxes, pages, prep, by_code)
+    try:
+        return await asyncio.wait_for(work, gate.remaining())
+    except TimeoutError:
+        logger.warning("the time limit passed while the lines were being located")
+        return [None] * total
+
+
+# --------------------------------------------------------------------------- #
 # Whole document
 # --------------------------------------------------------------------------- #
 
@@ -933,7 +1066,12 @@ class Prepared:
     mime: str
     n: int = 0  # pages
     evidence: ev.Evidence | None = None  # the text layer, when the document has its own
-    text_pages: list[list[lay.TextLine]] | None = None  # set when the layout road is taken
+    # The same text layer with coordinates: set whenever evidence is (unless reading it
+    # failed), for the layout road and for locating what the model read.
+    text_pages: list[list[lay.TextLine]] | None = None
+    # How each page of a PDF is displayed, one per page ([] for a photo, or when the page
+    # boxes could not be read; None for a page without a usable box).
+    frames: list[bx.PageFrame | None] = field(default_factory=list)
     layout_info: JSONObject = field(default_factory=dict)
     quality: JSONObject = field(default_factory=dict)
     photo_issues: list[Issue] = field(default_factory=list)
@@ -957,7 +1095,8 @@ def prepare(data: bytes, mime: str, cfg: Config) -> Prepared:
     raises for a bad file: Prepared.failure says why nothing can be sent."""
     n = 0
     evidence: ev.Evidence | None = None
-    text_pages: list[list[lay.TextLine]] | None = None  # set when the layout road is taken
+    text_pages: list[list[lay.TextLine]] | None = None
+    frames: list[bx.PageFrame | None] = []
     layout_info: JSONObject = {"status": "off", "reason": "not a PDF"}
     quality: JSONObject = {}
     photo_issues: list[Issue] = []
@@ -981,6 +1120,7 @@ def prepare(data: bytes, mime: str, cfg: Config) -> Prepared:
                 header_part = parts[0]
         else:
             n = page_count(data)
+            frames = _page_frames(data)
             texts = ev.pdf_text_layer(data)
             layout_info["reason"] = "no text layer"
             if ev.has_text_layer(texts):  # hard checks only against a text layer
@@ -997,13 +1137,14 @@ def prepare(data: bytes, mime: str, cfg: Config) -> Prepared:
                 else:
                     evidence = ev.build(texts, "text_layer")
                     layout_info["reason"] = "disabled"
-                    if cfg.use_layout:
-                        try:
-                            text_pages = lay.text_lines(data)
-                        # Fault boundary: the layout road is an optimisation; without it
-                        # the model reads every page.
-                        except Exception as e:
-                            logger.warning("no text layer with coordinates", exc_info=True)
+                    try:
+                        text_pages = lay.text_lines(data)
+                    # Fault boundary: the layout road is an optimisation, and so is
+                    # framing what the model read; without them the model reads every page
+                    # and nothing is framed.
+                    except Exception as e:
+                        logger.warning("no text layer with coordinates", exc_info=True)
+                        if cfg.use_layout:
                             layout_info["reason"] = (
                                 "text layer with coordinates is not available: "
                                 f"{type(e).__name__}: {e}"
@@ -1045,6 +1186,7 @@ def prepare(data: bytes, mime: str, cfg: Config) -> Prepared:
         n=n,
         evidence=evidence,
         text_pages=text_pages,
+        frames=frames,
         layout_info=layout_info,
         quality=quality,
         photo_issues=photo_issues,
@@ -1071,8 +1213,9 @@ async def process(
 
     on_page is called once per page, in its final form, as soon as it is settled.
 
-    lane runs the local work on the file (prepare: pypdf, pdfium, Pillow, OpenCV), so the
-    event loop stays free while a document is opened and measured. It must have one
+    lane runs the local work on the file (prepare: pypdf, pdfium, Pillow, OpenCV; and, once
+    read, locating the lines in the text layer), so the event loop stays free while a
+    document is opened, measured and framed. It must have one
     thread and be the only one that calls those libraries: pdfium must never be called
     from two threads at once. None: the work runs on the calling thread, never on the
     loop's default executor (a pool of several threads).
@@ -1114,7 +1257,7 @@ async def process(
             quality=prep.quality,
             notes=notes,
         )
-    return await _read(prep, client, cfg, on_page, started, gate)
+    return await _read(prep, client, cfg, on_page, started, gate, lane)
 
 
 async def _read(
@@ -1124,6 +1267,7 @@ async def _read(
     on_page: Callable[[PageResult], None] | None,
     started: float,
     gate: Gate,
+    lane: Executor | None = None,
 ) -> Result:
     """Send the parts of a prepared file to the model, check what comes back and build the
     result. Pure Python on extracted text and model answers: no file is opened here."""
@@ -1159,7 +1303,8 @@ async def _read(
     layout_attempts: list[Attempt] = []
     layout_issues: list[Issue] = []
     notes: list[JSONObject] = list(scan_notes)
-    if text_pages is None or evidence is None:
+    read_by_code: tuple[lay.Parsed, lay.Layout] | None = None  # framed after reading
+    if not cfg.use_layout or text_pages is None or evidence is None:
         first, *rest = await asyncio.gather(
             read_header(client, header_part, cfg, gate=gate), *(one(p) for p in range(1, n + 1))
         )
@@ -1187,13 +1332,18 @@ async def _read(
         by_code: dict[int, PageResult] | None = None
         if error is None:
             try:
-                parsed = lay.parse_document(text_pages, lay.resolve(raw, text_pages[wp - 1]))
+                layout = lay.resolve(raw, text_pages[wp - 1])
+                parsed = lay.parse_document(text_pages, layout)
                 by_code, notes = layout_pages(parsed, n, evidence)
             except lay.LayoutError as e:  # the answer does not fit the page
                 error = f"{type(e).__name__}: {e}"
             except Exception as e:  # fault boundary: a bug takes the same way out
                 logger.warning("rows could not be read by the layout", exc_info=True)
                 error = f"{type(e).__name__}: {e}"
+            else:
+                # Framed at the end, on the lane, outside the try above: a failure to frame
+                # the cells must never send the document to the fallback road.
+                read_by_code = parsed, layout
         if by_code is None:
             layout_info = {"status": "failed", "reason": error}
         elif seen is None:
@@ -1319,6 +1469,9 @@ async def _read(
         issues.append(Issue("deadline_exceeded", text))
     link_issues(pages, doc, issues, document)
 
+    code_read = read_by_code if any(p.method == "layout" for p in pages) else None
+    line_boxes = await _frame_lines(pages, prep, code_read, lane, gate)
+
     all_attempts = header_attempts + layout_attempts + [a for p in pages for a in p.attempts]
     if unread or not lines or not header:
         status = "failed"
@@ -1343,4 +1496,7 @@ async def _read(
         layout_attempts=layout_attempts,
         notes=notes,
         quality=quality,
+        boxes=line_boxes,
+        frames=prep.frames,
+        text_layer=evidence is not None,
     )

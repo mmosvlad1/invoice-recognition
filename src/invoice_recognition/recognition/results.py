@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass, field
 
+from invoice_recognition.recognition.boxes import LineBoxes, PageFrame
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.shapes import Checkpoint, Header, JSONObject, Line
 
@@ -111,6 +112,20 @@ class Result:
     #   limits   - quality.ScanLimits they were held against
     # Every reject and warn reason is also in `issues` as scan_<code> with the page number.
     quality: JSONObject = field(default_factory=dict)
+    # Where each line is printed (boxes.py), parallel to `lines`: the rectangles of its
+    # printed values on its own page `lines[i]["page"]`, or None when it was not located (a
+    # scan, a photo, a page without a usable box, a line whose values are printed nowhere
+    # on its page). Rectangles are in points of the page as displayed, top-left origin.
+    # Its "row" is the whole printed item on a page found by code (the row and its wrapped
+    # description), and the item's own printed row only on a page the model read.
+    boxes: list[LineBoxes | None] = field(default_factory=list)
+    # How each page of a PDF is displayed (one per page; None for a page without a usable
+    # box): the frame the rectangles are given in. [] for a photo and a file not read.
+    frames: list[PageFrame | None] = field(default_factory=list)
+    # The document has its own printed text that values can be located in: a PDF with a
+    # text layer (not a scan, even one with somebody's OCR text over it, nor a photo).
+    text_layer: bool = False
+    # boxes, frames and text_layer are not in to_json(): the API shows them.
 
     @property
     def method(self) -> str:

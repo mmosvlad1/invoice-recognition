@@ -78,3 +78,17 @@ def test_damaged_file_gives_a_failure_and_nothing_to_send() -> None:
         issues, notes = prep.failure
         assert [i.check for i in issues] == ["unreadable_file"] and notes == []
         assert prep.parts == [] and prep.header_part is None
+
+
+def test_every_pdf_gets_its_page_frames_and_a_text_layer_its_coordinates() -> None:
+    data = (INVOICES / "m_grouped.pdf").read_bytes()
+    # The text layer with coordinates is read whatever the layout road: lines the model
+    # reads are located in it.
+    prep = pl.prepare(data, "application/pdf", Config(use_layout=False))
+    assert prep.text_pages is not None and len(prep.text_pages) == len(prep.frames) == prep.n
+    assert prep.layout_info == {"status": "off", "reason": "disabled"}
+    assert all(f is not None and (f.width, f.height) == (595.3, 841.9) for f in prep.frames)
+
+    scan = pl.prepare(scanned("good", "blank"), "application/pdf", Config())
+    assert scan.text_pages is None and len(scan.frames) == 2
+    assert pl.prepare(jpeg(photo()), "image/jpeg", Config()).frames == []

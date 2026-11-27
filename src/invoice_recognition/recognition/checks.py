@@ -3,7 +3,9 @@
 Each check answers a different question and, where it can, says WHERE the
 problem is (line, page), so the flow can re-read one page instead of the
 whole document and the user can be shown the doubtful rows - and which fields
-of that row or of the header are in doubt (Issue.fields).
+of that row or of the header are in doubt (Issue.fields). Where arithmetic
+determines it, an issue also carries the values that would settle it
+(Issue.suggestions).
 
 Expected shape of `doc`:
     header:      {supplier_name, subtotal, tax_total, total,
@@ -15,9 +17,10 @@ Expected shape of `doc`:
 """
 
 from collections import Counter
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal, InvalidOperation
-from typing import cast
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import Any, cast
 
 from invoice_recognition.recognition.evidence import CENT, Evidence, money, printed_forms
 from invoice_recognition.shapes import Checkpoint, Doc, Header, JSONObject, Line
@@ -87,6 +90,11 @@ def dec(v: object) -> Decimal | None:
     return d
 
 
+def plain(x: Decimal) -> int | float:
+    """A number as JSON writes it: an int when it is whole, else a float."""
+    return int(x) if x == x.to_integral_value() else float(x)
+
+
 def _lines(doc: Doc) -> list[Line]:
     return [item for item in (doc.get("lines") or []) if isinstance(item, dict)]
 
@@ -97,44 +105,52 @@ def _lines(doc: Doc) -> list[Line]:
 
 
 def check_doc_sums(doc: Doc) -> list[Issue]:
-    out = []
+    return list(_doc_sums(doc).values())
+
+
+def _lines_sum(lines: list[Line]) -> Decimal:
+    """The sum of the amounts of the lines; a line without one counts as nothing."""
+    amounts = (dec(item.get("amount")) for item in lines)
+    return sum((a for a in amounts if a is not None), Decimal(0))
+
+
+def _doc_sums(doc: Doc) -> dict[str, Issue]:
+    """The issues of check_doc_sums, each under the name of what it verifies."""
+    out: dict[str, Issue] = {}
     header: Header = doc.get("header") or {}
     lines = _lines(doc)
     supplier = header.get("supplier_name")
     # A number, list or object is not a supplier name.
     if not (isinstance(supplier, str) and supplier.strip()):
-        out.append(Issue("doc_sums", "supplier is missing", fields=["header.supplier_name"]))
+        out["supplier"] = Issue("doc_sums", "supplier is missing", fields=["header.supplier_name"])
     if not lines:
-        return [*out, Issue("doc_sums", "no line items")]
+        return out | {"lines": Issue("doc_sums", "no line items")}
     subtotal, tax, total = (dec(header.get(k)) for k in ("subtotal", "tax_total", "total"))
-    amounts = [dec(item.get("amount")) for item in lines]
     if subtotal is None or tax is None or total is None:
         missing = [
             f"header.{k}"
             for k, v in (("subtotal", subtotal), ("tax_total", tax), ("total", total))
             if v is None
         ]
-        return [*out, Issue("doc_sums", "totals are missing in the header", fields=missing)]
-    if None in amounts:
+        return out | {
+            "totals": Issue("doc_sums", "totals are missing in the header", fields=missing)
+        }
+    if any(dec(item.get("amount")) is None for item in lines):
         # One issue for every line without an amount: the column, not each row.
-        out.append(Issue("doc_sums", "some lines have no amount", fields=["line.amount"]))
-    lines_sum = sum((a for a in amounts if a is not None), Decimal(0))
+        out["amounts"] = Issue("doc_sums", "some lines have no amount", fields=["line.amount"])
+    lines_sum = _lines_sum(lines)
     if abs(lines_sum - subtotal) > CENT:
-        out.append(
-            Issue(
-                "doc_sums",
-                f"lines add up to {lines_sum}, invoice subtotal is {subtotal} "
-                f"(difference {lines_sum - subtotal})",
-                fields=["header.subtotal", "line.amount"],
-            )
+        out["subtotal"] = Issue(
+            "doc_sums",
+            f"lines add up to {lines_sum}, invoice subtotal is {subtotal} "
+            f"(difference {lines_sum - subtotal})",
+            fields=["header.subtotal", "line.amount"],
         )
     if abs(subtotal + tax - total) > CENT:
-        out.append(
-            Issue(
-                "doc_sums",
-                f"subtotal {subtotal} + tax {tax} != total {total}",
-                fields=["header.subtotal", "header.tax_total", "header.total"],
-            )
+        out["total"] = Issue(
+            "doc_sums",
+            f"subtotal {subtotal} + tax {tax} != total {total}",
+            fields=["header.subtotal", "header.tax_total", "header.total"],
         )
     return out
 
@@ -161,6 +177,12 @@ def check_line_math(doc: Doc) -> list[Issue]:
                     line=i,
                     page=item.get("page"),
                     fields=missing,
+                    # Only the amount is missing: quantity x unit price is what it would be.
+                    suggestions=(
+                        [_suggest("line.amount", money(q * p))]
+                        if a is None and q is not None and p is not None
+                        else []
+                    ),
                 )
             )
         elif abs(money(q * p) - a) > CENT:
@@ -179,9 +201,64 @@ def check_line_math(doc: Doc) -> list[Issue]:
                     line=i,
                     page=item.get("page"),
                     fields=doubt,
+                    suggestions=_line_alternatives(q, p, a, doubt),
                 )
             )
     return out
+
+
+# A quantity is not printed with more decimals than this (grams of a kilogram).
+_QUANTITY_DECIMALS = 3
+
+
+def _suggest(name: str, value: Decimal) -> JSONObject:
+    return {"set": {name: plain(value)}, "source": "arithmetic"}
+
+
+def _decimals(x: Decimal) -> int:
+    """How many digits `x` has after the point."""
+    return max(0, -cast(int, x.as_tuple().exponent))
+
+
+def _rounded(x: Decimal, places: int) -> Decimal | None:
+    """`x` rounded half up to `places` decimals; None when that takes more digits than the
+    28-digit precision of decimal arithmetic holds (quantize raises)."""
+    try:
+        return x.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return None
+
+
+def _first(tried: Iterable[Decimal | None], exact: Callable[[Decimal], bool]) -> Decimal | None:
+    """The first value tried that is not zero and is exact."""
+    return next((v for v in tried if v is not None and v != 0 and exact(v)), None)
+
+
+def _line_alternatives(q: Decimal, p: Decimal, a: Decimal, doubt: list[str]) -> list[JSONObject]:
+    """For each number in doubt, the value that makes quantity x unit price give the amount
+    when the other two are right: alternatives, never a combined fix. Only exact values,
+    whose product, rounded to cents, is the amount itself, and only plausible ones: a
+    quantity of at most three decimals (a whole one when the quantity was read whole), a
+    unit price in cents or with as many decimals as the price was read with, never zero.
+
+    The quantity is the amount over the price rounded to 0, 1, 2 and then 3 decimals (it
+    also finds the quantity whose thousands separator was read as a decimal point); the
+    unit price is the amount over the quantity rounded to 2 decimals and then more, up to
+    those of the price as read. The first that is exact is offered."""
+    found: dict[str, Decimal] = {}
+    if "line.quantity" in doubt and p != 0:
+        places = range(1 if q == q.to_integral_value() else _QUANTITY_DECIMALS + 1)
+        v = _first((_rounded(a / p, n) for n in places), lambda x: money(x * p) == a)
+        if v is not None:
+            found["line.quantity"] = v
+    if "line.unit_price" in doubt and q != 0:
+        places = range(2, max(2, _decimals(p)) + 1)
+        v = _first((_rounded(a / q, n) for n in places), lambda x: money(q * x) == a)
+        if v is not None:
+            found["line.unit_price"] = v
+    if "line.amount" in doubt:
+        found["line.amount"] = money(q * p)
+    return [_suggest(k, v) for k, v in found.items()]
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +267,13 @@ def check_line_math(doc: Doc) -> list[Issue]:
 
 
 def check_tax(doc: Doc) -> list[Issue]:
-    out = []
+    return list(_tax(doc).values())
+
+
+def _tax(doc: Doc) -> dict[object, Issue]:
+    """The issues of check_tax, each under the rate it is about ("total" without a
+    breakdown)."""
+    out: dict[object, Issue] = {}
     header: Header = doc.get("header") or {}
     lines = _lines(doc)
     by_rate: dict[Decimal, Decimal] = {}
@@ -215,21 +298,17 @@ def check_tax(doc: Doc) -> list[Issue]:
             base_printed = (printed.get(rate) or (None, None))[0]
             if base_printed is None:
                 if base_lines:
-                    out.append(
-                        Issue(
-                            "tax",
-                            f"lines carry {rate}% tax on {base_lines}, "
-                            f"but the invoice has no {rate}% row",
-                            fields=["line.tax_rate", "header.tax_breakdown"],
-                        )
+                    out[rate] = Issue(
+                        "tax",
+                        f"lines carry {rate}% tax on {base_lines}, "
+                        f"but the invoice has no {rate}% row",
+                        fields=["line.tax_rate", "header.tax_breakdown"],
                     )
             elif abs(base_lines - base_printed) > CENT:
-                out.append(
-                    Issue(
-                        "tax",
-                        f"lines at {rate}% add up to {base_lines}, invoice says {base_printed}",
-                        fields=["line.tax_rate", "line.amount", "header.tax_breakdown"],
-                    )
+                out[rate] = Issue(
+                    "tax",
+                    f"lines at {rate}% add up to {base_lines}, invoice says {base_printed}",
+                    fields=["line.tax_rate", "line.amount", "header.tax_breakdown"],
                 )
     else:
         tax_total = dec(header.get("tax_total"))
@@ -238,12 +317,10 @@ def check_tax(doc: Doc) -> list[Issue]:
             Decimal(0),
         )
         if tax_total is not None and abs(expected - tax_total) > Decimal("0.05"):
-            out.append(
-                Issue(
-                    "tax",
-                    f"tax computed from lines is {expected}, invoice says {tax_total}",
-                    fields=["header.tax_total", "line.tax_rate"],
-                )
+            out["total"] = Issue(
+                "tax",
+                f"tax computed from lines is {expected}, invoice says {tax_total}",
+                fields=["header.tax_total", "line.tax_rate"],
             )
     return out
 
@@ -301,9 +378,15 @@ def check_checkpoints(doc: Doc, partial: bool = False) -> list[Issue]:
     partial=True: `doc` is a page range from the middle of a document, so the
     first checkpoint cannot be verified (its lines are on earlier pages); it
     only sets the base for the following ones."""
+    return list(_checkpoints(doc, partial).values())
+
+
+def _checkpoints(doc: Doc, partial: bool) -> dict[range, Issue]:
+    """The issues of check_checkpoints, each under the lines it adds up (indexes into the
+    line items): no two control totals that are verified add up the same lines."""
     lines = _lines(doc)
     amounts = [dec(item.get("amount")) or Decimal(0) for item in lines]
-    out = []
+    out: dict[range, Issue] = {}
     prev_pos, prev_amount = 0, Decimal(0)
     cps: list[Checkpoint] = sorted(
         (c for c in (doc.get("checkpoints") or []) if isinstance(c, dict)),
@@ -324,19 +407,147 @@ def check_checkpoints(doc: Doc, partial: bool = False) -> list[Issue]:
             continue
         if abs(segment - amount) > CENT and abs(prev_amount + segment - amount) > CENT:
             label = c.get("label") or "control total"
-            out.append(
-                Issue(
-                    "checkpoints",
-                    f'lines {prev_pos + 1}-{pos} add up to {segment}, but "{label}" says {amount}',
-                    line=prev_pos,
-                    page=c.get("page"),
-                    # Not "line.amount": the line is only the first row of the segment, and
-                    # framing its amount would point at a cell that may well be right.
-                    fields=[],
-                )
+            out[range(prev_pos, pos)] = Issue(
+                "checkpoints",
+                f'lines {prev_pos + 1}-{pos} add up to {segment}, but "{label}" says {amount}',
+                line=prev_pos,
+                page=c.get("page"),
+                # Not "line.amount": the line is only the first row of the segment, and
+                # framing its amount would point at a cell that may well be right.
+                fields=[],
             )
         prev_pos, prev_amount = pos, amount
     return out
+
+
+# --------------------------------------------------------------------------- #
+# One wrong line amount behind the issues of the document's arithmetic
+# --------------------------------------------------------------------------- #
+
+
+def with_amounts(doc: Doc, amounts: dict[int, Decimal]) -> Doc:
+    """A copy of `doc` in which the line at each index (of its line items) has the amount
+    given. The lines of `doc` are not changed."""
+    lines = [
+        item | {"amount": amounts[i]} if i in amounts else item
+        for i, item in enumerate(_lines(doc))
+    ]
+    return doc | {"lines": lines}
+
+
+# What testing each line may cost, counted as the lines with a new amount times the size
+# of the document (its lines, control totals and tax rows). Testing whether an issue that
+# passes with the new amounts fails again without one line's runs its check over the
+# whole document once more, so this bounds the rows all the tests visit together: about
+# 0.05 s of the event loop. Above it, every one among an issue's own lines that has a new
+# amount is taken as needed, untested: the document was misread throughout, or is long.
+TEST_BUDGET = 25_000
+
+
+def _size(doc: Doc) -> int:
+    """The rows a check of `doc` goes through: lines, control totals and tax rows."""
+    breakdown = (doc.get("header") or {}).get("tax_breakdown")
+    checkpoints = doc.get("checkpoints")
+    return sum(len(x) for x in (doc.get("lines"), checkpoints, breakdown) if isinstance(x, list))
+
+
+def explained_by_lines(
+    doc: Doc, amounts: dict[int, Decimal], partial: bool = False
+) -> list[tuple[Issue, list[int]]]:
+    """The issues of the document's arithmetic that pass once lines get other amounts.
+
+    amounts: {line index: the amount it would have}. Looked at: the lines against the
+    subtotal (check_doc_sums), the tax by rate (check_tax) and the control totals
+    (check_checkpoints); with partial=True (a page range) the control totals only, as
+    check_checkpoints(doc, partial=True) raises them. Returns each issue that fails on
+    `doc` and passes with the new amounts, as raised on `doc`, with the indexes of the
+    lines it needs, in order: those among its own lines (all for the subtotal, those of
+    its rate for the tax, those it adds up for a control total) without whose new amount
+    it fails again. When testing that would cost more than TEST_BUDGET, all of its own
+    lines that have one, untested.
+
+    Each check runs on `doc` and with the new amounts, and then once without each line
+    tested: the time grows with the length of the document, not with its square."""
+    lines = _lines(doc)
+    of_rate: dict[Decimal, list[int]] = {}
+    for i, item in enumerate(lines):
+        rate = dec(item.get("tax_rate"))
+        if rate is not None:
+            of_rate.setdefault(rate, []).append(i)
+
+    def subtotal(d: Doc) -> dict[str, Issue]:
+        return {k: i for k, i in _doc_sums(d).items() if k == "subtotal"}
+
+    def checkpoints(d: Doc) -> dict[range, Issue]:
+        return _checkpoints(d, partial)
+
+    # The lines an issue depends on, from the key it is raised under.
+    def every_line(key: object) -> Iterable[int]:
+        return range(len(lines))
+
+    def same_rate(key: object) -> Iterable[int]:
+        if key == "total":  # without a breakdown: every line with a rate
+            return sorted(i for at in of_rate.values() for i in at)
+        return of_rate.get(key, []) if isinstance(key, Decimal) else []
+
+    def added_up(key: object) -> Iterable[int]:
+        return key if isinstance(key, range) else []
+
+    checks: list[tuple[Callable[[Doc], Mapping[Any, Issue]], Callable[[object], Iterable[int]]]] = (
+        [(checkpoints, added_up)]
+        if partial
+        else [(subtotal, every_line), (_tax, same_rate), (checkpoints, added_up)]
+    )
+    changed = with_amounts(doc, amounts)
+    out = []
+    for check, own in checks:
+        after = check(changed)
+        explained = [
+            (key, issue, [i for i in own(key) if i in amounts])
+            for key, issue in check(doc).items()
+            if key not in after
+        ]
+        if len(amounts) * _size(doc) <= TEST_BUDGET:
+            # A line that is the only one of an issue's own lines with a new amount is
+            # needed without a test: without it the issue is back where it was on `doc`.
+            tested = sorted({i for *_, mine in explained if len(mine) > 1 for i in mine})
+            without = {
+                i: check(with_amounts(doc, {j: v for j, v in amounts.items() if j != i}))
+                for i in tested
+            }
+            explained = [
+                (key, issue, [i for i in mine if len(mine) == 1 or key in without[i]])
+                for key, issue, mine in explained
+            ]
+        out += [(issue, needed) for _, issue, needed in explained if needed]
+    return out
+
+
+def agree_with_subtotal(doc: Doc, amounts: dict[int, Decimal]) -> list[int]:
+    """The lines whose amount in `amounts` makes the lines add up to the subtotal of the
+    header (within a cent) and whose amount as read does not, with the other lines in
+    `amounts` either as read or each at its amount from there. Indexes into the line items
+    of `doc`, in order; none without a subtotal. One pass over the lines."""
+    lines = _lines(doc)
+    subtotal = dec((doc.get("header") or {}).get("subtotal"))
+    if subtotal is None or not lines:
+        return []
+    read = {i: dec(lines[i].get("amount")) or Decimal(0) for i in amounts}
+    as_read = _lines_sum(lines)
+    changed = as_read + sum((amounts[i] - read[i] for i in amounts), Decimal(0))
+
+    def fits(total: Decimal) -> bool:
+        return abs(total - subtotal) <= CENT
+
+    return [
+        i
+        for i in sorted(amounts)
+        # The other lines as read, then each at its new amount.
+        if any(
+            fits(rest + amounts[i]) and not fits(rest + read[i])
+            for rest in (as_read - read[i], changed - amounts[i])
+        )
+    ]
 
 
 # --------------------------------------------------------------------------- #

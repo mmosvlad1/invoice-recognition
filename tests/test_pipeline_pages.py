@@ -11,10 +11,11 @@ from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.evidence import Evidence
 from invoice_recognition.recognition.prompts import EXTRACT_HEADER
+from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import Checkpoint, Line
 
 from drawn import scan
-from fakes import Server, codes, header_for, line, make_pdf, never, recording, run, sse
+from fakes import Answer, Server, codes, header_for, line, make_pdf, never, recording, run, sse
 
 # --------------------------------------------------------------------------- #
 # Which attempt wins
@@ -311,3 +312,80 @@ def test_header_total_must_match_the_lines() -> None:
     header = header_for(rows) | {"subtotal": 41.0}
     res = run(scan(1), "application/pdf", Server(header, {1: [rows]}))
     assert "doc_sums" in codes(res.issues) and res.status == "needs_review"
+
+
+# --------------------------------------------------------------------------- #
+# Where a stronger model would read the page again
+# --------------------------------------------------------------------------- #
+
+
+def retry_notes(res: Result) -> list[tuple[int, str]]:
+    return [(n["page"], n["kind"]) for n in res.notes if n["source"] == "retry"]
+
+
+def test_page_that_still_fails_after_every_attempt_says_a_stronger_model_would_read_it() -> None:
+    bad = [line(1), line(2, amount=99.0)]
+    p2 = [line(3)]
+    res = run(scan(2), "application/pdf", Server(header_for(bad + p2), {1: [bad], 2: [p2]}))
+    assert len(res.pages[0].attempts) == 2 and res.calls == 4  # no third request
+    assert res.pages[0].stronger_model and not res.pages[1].stronger_model
+    assert res.notes == [
+        {
+            "page": 1,
+            "kind": "stronger_model_not_called",
+            "text": "Page 1 still has problems after 2 reads. A stronger, more expensive model "
+            "could read it again; it is not used here, to save cost. Please check this page.",
+            "source": "retry",
+        }
+    ]
+    assert codes(res.issues)[0] == "line_math" and res.status == "needs_review"
+    assert res.to_json()["notes"] == res.notes
+
+
+def test_page_fixed_by_its_second_attempt_needs_no_stronger_model() -> None:
+    good = [line(1), line(2)]
+    server = Server(header_for(good), {1: [[line(1), line(2, amount=99.0)], good]})
+    res = run(scan(1), "application/pdf", server)
+    assert server.calls[1] == 2 and res.status == "ok" and retry_notes(res) == []
+
+
+def test_one_read_says_read_not_reads() -> None:
+    bad = [line(1, amount=99.0)]
+    server = Server(header_for(bad), {1: [bad]})
+    res = run(scan(1), "application/pdf", server, Config(page_models=("vendor/model",)))
+    assert retry_notes(res) == [(1, "stronger_model_not_called")]
+    assert res.notes[0]["text"].startswith("Page 1 still has problems after 1 read. ")
+
+
+def test_page_no_request_could_read_gets_no_stronger_model() -> None:
+    # Every attempt ended in a request error: the page_read issue already says so, and
+    # another model is not the remedy for a failed request.
+    rows = [line(1)]
+    failing: list[Answer] = [httpx.Response(500, text="boom"), RuntimeError("stream blew up")]
+    res = run(scan(1), "application/pdf", Server(header_for(rows), {1: failing}))
+    assert codes(res.pages[0].issues) == ["page_read"] and len(res.pages[0].attempts) == 2
+    assert not res.pages[0].stronger_model and retry_notes(res) == []
+
+
+def test_one_answered_attempt_is_enough_for_the_note() -> None:
+    rows = [line(1)]
+    answers: list[Answer] = [httpx.Response(500, text="boom"), [line(1, amount=99.0)]]
+    res = run(scan(1), "application/pdf", Server(header_for(rows), {1: answers}))
+    assert retry_notes(res) == [(1, "stronger_model_not_called")]
+
+
+def test_no_note_when_the_attempts_already_name_another_model() -> None:
+    bad = [line(1, amount=99.0)]
+    cfg = Config(page_models=("vendor/fast", "vendor/strong"))
+    server = Server(header_for(bad), {1: [bad]})
+    res = run(scan(1), "application/pdf", server, cfg)
+    assert len(res.pages[0].attempts) == 2 and res.status == "needs_review"
+    assert [a.model for a in res.pages[0].attempts] == ["vendor/fast", "vendor/strong"]
+    assert retry_notes(res) == []
+
+
+def test_page_with_only_a_doubtful_document_issue_needs_no_stronger_model() -> None:
+    rows = [line(1), line(2)]
+    header = header_for(rows) | {"total": 1.0}  # the document does not add up, the page does
+    res = run(scan(1), "application/pdf", Server(header, {1: [rows]}))
+    assert "doc_sums" in codes(res.issues) and retry_notes(res) == []

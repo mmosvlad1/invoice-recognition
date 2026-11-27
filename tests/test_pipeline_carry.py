@@ -35,6 +35,11 @@ def prompts(bodies: list[JSONObject]) -> dict[int, list[str]]:
     return out
 
 
+def carried(res: Result) -> list[JSONObject]:
+    """The notes about text carried over a page break."""
+    return [n for n in res.notes if n["source"] == "carry_in"]
+
+
 def page(rows: list[Line], carry: object = "") -> JSONObject:
     """An answer to the page prompt with the field."""
     return {"carry_in": carry, "rows": rows}
@@ -187,7 +192,7 @@ def test_previous_page_without_rows_and_previous_page_that_was_not_read() -> Non
     # page 2 has no rows at all (flagged as empty, as before); page 3 brings a tail
     server = Server(header_for(p1 + p3), {1: [page(p1)], 2: [page([])], 3: [page(p3, TAIL)]})
     res = run(scan(3), "application/pdf", server)
-    assert [(n["kind"], n["reason"]) for n in res.notes] == [
+    assert [(n["kind"], n["reason"]) for n in carried(res)] == [
         ("carry_without_owner", "Page 2 has no rows.")
     ]
     # the issue the flow had without the field; the note added none
@@ -200,7 +205,7 @@ def test_previous_page_without_rows_and_previous_page_that_was_not_read() -> Non
     header = header_for([line(n) for n in (1, 2, 3, 4)])
     res = run(scan(2), "application/pdf", Server(header, {1: [cut], 2: [page([line(4)], TAIL)]}))
     assert len(res.lines) == 4 and res.lines[2]["description"] == "Item 3"
-    assert [(n["kind"], n["reason"]) for n in res.notes] == [
+    assert [(n["kind"], n["reason"]) for n in carried(res)] == [
         ("carry_without_owner", "Page 1 could not be read in full.")
     ]
     assert [i.check for i in res.issues] == ["page_read"]
@@ -237,7 +242,7 @@ def test_carry_in_of_a_salvaged_answer_is_not_used() -> None:
     res = run(scan(2), "application/pdf", server)
     # the complete row is kept, as before
     assert [item["sku"] for item in res.lines] == ["SKU-001", "SKU-002", "SKU-003"]
-    assert res.notes == [] and res.lines[1]["description"] == "Item 2"
+    assert carried(res) == [] and res.lines[1]["description"] == "Item 2"
     assert "page_read" in [i.check for i in res.issues]
 
 
@@ -264,7 +269,7 @@ def test_tail_comes_from_the_attempt_that_is_kept() -> None:
     res = run(scan(2), "application/pdf", server)
     assert server.calls[2] == 2 and res.lines[2]["amount"] == 99.0
     assert res.lines[1]["description"] == f"Item 2 {TAIL}"
-    assert [n["text"] for n in res.notes] == [TAIL]
+    assert [n["text"] for n in carried(res)] == [TAIL]
 
     # the attempt that is kept has no tail: the tail of the rejected attempt is not used
     server = Server(header, {1: [page(p1)], 2: [page(bad, "WRONG TAIL"), page(good)]})

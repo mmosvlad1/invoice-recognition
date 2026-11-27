@@ -157,6 +157,18 @@
     "line": 1,
     "line_no": 2,
     "sku": "SKU-002"
+   },
+   {
+    "page": 1,
+    "kind": "stronger_model_not_called",
+    "text": "Page 1 still has problems after 2 reads. A stronger, more expensive model could read it again; it is not used here, to save cost. Please check this page.",
+    "source": "retry"
+   },
+   {
+    "page": 2,
+    "kind": "stronger_model_not_called",
+    "text": "Page 2 still has problems after 2 reads. A stronger, more expensive model could read it again; it is not used here, to save cost. Please check this page.",
+    "source": "retry"
    }
   ],
   "quality": {},

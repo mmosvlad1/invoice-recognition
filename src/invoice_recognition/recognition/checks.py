@@ -144,6 +144,8 @@ def check_tax(doc: Doc) -> list[Issue]:
         if r is not None and a is not None:
             by_rate[r] = by_rate.get(r, Decimal(0)) + a
     breakdown = header.get("tax_breakdown") or []
+    if not isinstance(breakdown, list):  # a number, string or object is not a breakdown
+        breakdown = []
     if breakdown:
         printed = {
             dec(t.get("rate")): (dec(t.get("base")), dec(t.get("tax")))

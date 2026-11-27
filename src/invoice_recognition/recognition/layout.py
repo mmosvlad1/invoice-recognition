@@ -451,6 +451,10 @@ class Parsed:
     lines: list[Line]  # numbers are Decimal
     checkpoints: list[Checkpoint]
     notes: list[JSONObject]  # rows the parser could not place: {page, row, kind, text}
+    # Parallel to lines: the text lines each line item was read from on its own page - its
+    # row, then every row of its wrapped description. A description continued at the top
+    # of the next page is in the line's value, not here.
+    rows: list[list[TextLine]] = field(default_factory=list)
 
 
 def parse_document(pages: list[list[TextLine]], layout: Layout, tol: float = X_TOL) -> Parsed:
@@ -465,6 +469,7 @@ def parse_document(pages: list[list[TextLine]], layout: Layout, tol: float = X_T
     ix = {f: layout.index(f) for f in FIELDS}
     required = [f for f in ("quantity", "unit_price", "amount") if ix[f] is not None]
     lines: list[Line] = []
+    rows: list[list[TextLine]] = []
     checkpoints: list[Checkpoint] = []
     notes: list[JSONObject] = []
 
@@ -475,6 +480,7 @@ def parse_document(pages: list[list[TextLine]], layout: Layout, tol: float = X_T
     open_item: Line | None = None  # the last item, while no declared non-item row has closed it
     for page in pages:
         prev: Line | None = None  # the item a description-only row would continue
+        prev_i = 0  # its index in lines, while prev is set
         carried = open_item  # an item the previous page may have left unfinished
         for row in page:
             cells, stray = assign(row.words, cols, tol)
@@ -504,7 +510,8 @@ def parse_document(pages: list[list[TextLine]], layout: Layout, tol: float = X_T
                     "page": row.page,
                 }
                 lines.append(item)
-                prev = open_item = item
+                rows.append([row])
+                prev, prev_i, open_item = item, len(lines) - 1, item
                 carried = None
                 if stray:
                     notes.append(
@@ -567,6 +574,7 @@ def parse_document(pages: list[list[TextLine]], layout: Layout, tol: float = X_T
             if prev is not None and only_description:
                 if layout.description_wraps:
                     prev["description"] = f"{prev['description']} {row.text}".strip()
+                    rows[prev_i].append(row)
                     continue  # the next row may continue it as well
                 notes.append(
                     {
@@ -600,4 +608,4 @@ def parse_document(pages: list[list[TextLine]], layout: Layout, tol: float = X_T
                     }
                 )
             prev = None
-    return Parsed(lines, checkpoints, notes)
+    return Parsed(lines, checkpoints, notes, rows)

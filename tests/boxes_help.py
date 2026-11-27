@@ -17,6 +17,9 @@ import pypdfium2.raw as pdfium_c
 from pypdf import PdfWriter, Transformation
 from pypdf.generic import RectangleObject
 
+from invoice_recognition.recognition import evidence as ev
+from invoice_recognition.recognition import layout as lay
+
 type Rect = tuple[float, float, float, float]
 
 UNITS = 10  # device units per point
@@ -167,3 +170,16 @@ def variant(data: bytes, kind: str) -> bytes:
     buf = io.BytesIO()
     w.write(buf)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# The layout road, as the flow takes it
+# --------------------------------------------------------------------------- #
+
+
+def layout_of(data: bytes, pages: list[list[lay.TextLine]], answer: object) -> lay.Layout:
+    """The model's layout answer resolved on the page the flow shows the model: the first
+    one whose text has rows that look like line items."""
+    evidence = ev.build(ev.pdf_text_layer(data), "text_layer")
+    shown = next((p.number for p in evidence.pages if p.item_rows), 1)
+    return lay.resolve(answer, pages[shown - 1])

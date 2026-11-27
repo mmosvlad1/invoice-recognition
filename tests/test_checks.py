@@ -24,6 +24,7 @@ from invoice_recognition.recognition.checks import (
     check_tax,
     dec,
     explained_by_lines,
+    ranges,
 )
 from invoice_recognition.recognition.evidence import CENT, build, money
 from invoice_recognition.shapes import Checkpoint, JSONObject, Line
@@ -1072,3 +1073,8 @@ def test_agree_with_subtotal() -> None:
     # amount as read does not.
     cancel = [line(1, amount=25.0), line(2, amount=15.0), line(3)]
     assert agree(cancel, 60.0, {0: 20, 1: 20}) == [0, 1]
+
+
+def test_ranges_join_runs_of_numbers() -> None:
+    assert ranges([12, 2, 6, 5, 7]) == "2, 5–7 and 12"
+    assert (ranges([3]), ranges([1, 2])) == ("3", "1–2")

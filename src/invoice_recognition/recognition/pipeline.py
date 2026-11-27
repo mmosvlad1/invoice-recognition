@@ -965,14 +965,7 @@ async def read_header(
 
 def page_ranges(pages: list[int]) -> str:
     """[2, 5, 6, 7, 12] -> "2, 5–7 and 12"."""
-    runs: list[list[int]] = []
-    for p in sorted(pages):
-        if runs and p == runs[-1][-1] + 1:
-            runs[-1].append(p)
-        else:
-            runs.append([p])
-    parts = [f"{r[0]}–{r[-1]}" if len(r) > 1 else str(r[0]) for r in runs]
-    return parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+    return checks.ranges(pages)
 
 
 def deadline_text(deadline_s: float | None, unread: list[int], header_read: bool) -> str:

@@ -9,6 +9,8 @@ tests/fixtures/answers: what the cheap model really answered. `<name>.layout.jso
 its description of the line-item table of a text-layer PDF; `m_split.scan.pages.json`
 holds its answers to the five pages of the scan of m_split, asked with the "carry_in"
 field, with the sha256 of the prompt each answer was given for.
+`m_split.scan.second.json` holds the answers of a model of another provider to the same
+five pages, asked with the plain page prompt (no "carry_in"), in the same format.
 """
 
 import json
@@ -88,6 +90,13 @@ def saved_layout(name: str) -> JSONObject:
 def saved_scan_pages() -> JSONObject:
     """The model's answers to the pages of m_split.scan.pdf, asked with "carry_in"."""
     data: JSONObject = json.loads((ANSWERS / "m_split.scan.pages.json").read_text())
+    return data
+
+
+def saved_second_pages() -> JSONObject:
+    """Another model's answers to the pages of m_split.scan.pdf, asked with the plain
+    page prompt: the second reading of the same scan."""
+    data: JSONObject = json.loads((ANSWERS / "m_split.scan.second.json").read_text())
     return data
 
 

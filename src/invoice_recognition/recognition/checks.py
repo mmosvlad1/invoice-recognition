@@ -95,6 +95,18 @@ def plain(x: Decimal) -> int | float:
     return int(x) if x == x.to_integral_value() else float(x)
 
 
+def ranges(numbers: Iterable[int]) -> str:
+    """Numbers for a message, runs joined: [2, 5, 6, 7, 12] -> "2, 5–7 and 12"."""
+    runs: list[list[int]] = []
+    for n in sorted(numbers):
+        if runs and n == runs[-1][-1] + 1:
+            runs[-1].append(n)
+        else:
+            runs.append([n])
+    parts = [f"{r[0]}–{r[-1]}" if len(r) > 1 else str(r[0]) for r in runs]
+    return parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
 def _lines(doc: Doc) -> list[Line]:
     return [item for item in (doc.get("lines") or []) if isinstance(item, dict)]
 

@@ -48,9 +48,16 @@ X_TOL = 1.0  # points; loose glyph boxes of one column edge agree to ~0.1 pt in 
 
 @dataclass
 class Word:
+    """A word of the text layer: its left and right X and, when it was read from a PDF,
+    its bottom and top Y. Coordinates are PDF user space, as pdfium gives them: not
+    turned by /Rotate and not moved to the crop box (boxes.PageFrame places them on the
+    page as displayed). A word built by hand has no height (0.0, 0.0)."""
+
     text: str
     x0: float
     x1: float
+    bottom: float = 0.0
+    top: float = 0.0
 
 
 @dataclass
@@ -65,7 +72,8 @@ class TextLine:
 
 
 def text_lines(data: bytes) -> list[list[TextLine]]:
-    """Text lines of every page, each word with its left and right X.
+    """Text lines of every page, each word with its left and right X and its bottom
+    and top Y: the union of the loose boxes of its characters.
 
     Lines are the same as in `evidence.pdf_text_layer` (pdfium's own line
     breaks), so row counts are comparable with the evidence module."""
@@ -89,10 +97,11 @@ def text_lines(data: bytes) -> list[list[TextLine]]:
                     continue
                 pdfium_c.FPDFText_GetLooseCharBox(tp, i, ctypes.byref(rect))
                 if cur is None:
-                    cur = Word(ch, rect.left, rect.right)
+                    cur = Word(ch, rect.left, rect.right, rect.bottom, rect.top)
                 else:
                     cur.text += ch
                     cur.x0, cur.x1 = min(cur.x0, rect.left), max(cur.x1, rect.right)
+                    cur.bottom, cur.top = min(cur.bottom, rect.bottom), max(cur.top, rect.top)
             if cur is not None:
                 rows[-1].append(cur)
             tp.close()

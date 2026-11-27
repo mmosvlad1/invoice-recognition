@@ -16,6 +16,7 @@ Expected shape of `doc`:
 from collections import Counter
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
+from typing import cast
 
 from invoice_recognition.recognition.evidence import CENT, Evidence, money, printed_forms
 from invoice_recognition.shapes import Checkpoint, Doc, Header, JSONObject, Line
@@ -40,19 +41,35 @@ class Issue:
         return out
 
 
+# No figure on an invoice needs a decimal exponent beyond this, either way.
+_MAX_EXPONENT = 100
+
+
 def dec(v: object) -> Decimal | None:
     """A number from the model's JSON: a number or a string ("20%" included).
     None if it is not one.
 
     NaN and infinity are None too: Python's JSON parser accepts them, and a
-    comparison with a NaN Decimal raises, which would crash every check."""
+    comparison with a NaN Decimal raises, which would crash every check.
+
+    So is a number of absurd size, such as "1e999999" or "1e-999999999": a product
+    of two of them overflows the decimal context (decimal.Overflow), and printing
+    one in full, as the presence checks do, takes as many digits as its exponent.
+    A value of 10^101 or more, or one with more than 100 digits after the point, is
+    not an invoice figure."""
     if v is None or isinstance(v, bool):
         return None
     try:
         d = Decimal(str(v).strip().rstrip("%"))
     except InvalidOperation, ValueError:
         return None
-    return d if d.is_finite() else None
+    if not d.is_finite():
+        return None
+    # The exponent is an int for every finite number ("n", "N" or "F" otherwise).
+    exponent = cast(int, d.as_tuple().exponent)
+    if d.adjusted() > _MAX_EXPONENT or exponent < -_MAX_EXPONENT:
+        return None
+    return d
 
 
 def _lines(doc: Doc) -> list[Line]:
@@ -107,7 +124,7 @@ def check_line_math(doc: Doc) -> list[Issue]:
             out.append(
                 Issue(
                     "line_math",
-                    "quantity, unit price or amount is missing",
+                    "quantity, unit price or amount is missing or is not a usable number",
                     line=i,
                     page=item.get("page"),
                 )

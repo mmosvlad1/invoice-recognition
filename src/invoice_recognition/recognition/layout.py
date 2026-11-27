@@ -33,6 +33,7 @@ from typing import Any
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
 
+from invoice_recognition.recognition import checks
 from invoice_recognition.shapes import Checkpoint, JSONObject, Line
 
 FIELDS = ("line_no", "sku", "description", "quantity", "unit", "unit_price", "tax_rate", "amount")
@@ -239,7 +240,8 @@ class Layout:
         return next((i for i, c in enumerate(self.columns) if c.field == name), None)
 
     def number(self, token: str | None) -> Decimal | None:
-        """Parse a printed number strictly in the declared format; None if it is not one."""
+        """Parse a printed number strictly in the declared format; None if it is not one,
+        or if it is out of the range checks.dec accepts."""
         if not token:
             return None
         s = token.strip().replace("−", "-").strip("€$£").strip()
@@ -260,7 +262,8 @@ class Layout:
             v = Decimal(s.replace(self.decimal, "."))
         except InvalidOperation:
             return None
-        return -v if neg else v
+        # A printed number of absurd length is not a usable value either (checks.dec).
+        return checks.dec(-v if neg else v)
 
 
 def _norm(s: object) -> str:
@@ -371,13 +374,9 @@ def resolve(raw: Any, page_lines: list[TextLine], tol: float = X_TOL) -> Layout:
         )
 
     tax = _object(raw.get("tax"))
-    rate = tax.get("document_rate")
-    try:
-        document_rate = (
-            Decimal(str(rate)) if rate is not None and not isinstance(rate, bool) else None
-        )
-    except InvalidOperation:
-        document_rate = None
+    # Every row gets this rate: a value that is not a usable number (NaN, absurd size) is
+    # no rate, as a value that is not a number at all.
+    document_rate = checks.dec(tax.get("document_rate"))
     non_item = [
         (str(r.get("kind") or "other"), _norm(r.get("starts_with") or ""))
         for r in (raw.get("non_item_rows") or [])

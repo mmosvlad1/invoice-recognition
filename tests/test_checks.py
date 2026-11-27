@@ -142,7 +142,7 @@ def test_line_math() -> None:
             "0.004 x 1000.0 = 4.00, but amount is 4000.0"
             " (quantity looks 1000x too small: thousands separator read as a decimal point)"
         ),
-        "quantity, unit price or amount is missing",
+        "quantity, unit price or amount is missing or is not a usable number",
     ]
 
 
@@ -374,7 +374,9 @@ def test_non_finite_numbers_from_the_model_do_not_crash_the_checks() -> None:
     assert doc is not None
     ev = build(["SKU-001 Item 1 2 10.00 20.00\nTotal 24.00 INV-1"], "text_layer")
     assert messages(check_doc_sums(doc)) == ["totals are missing in the header"]
-    assert messages(check_line_math(doc)) == ["quantity, unit price or amount is missing"]
+    assert messages(check_line_math(doc)) == [
+        "quantity, unit price or amount is missing or is not a usable number"
+    ]
     assert messages(check_tax(doc)) == []  # neither the line's rate nor the printed base is known
     assert check_checkpoints(doc) == []
     assert check_numbering(doc) == []
@@ -412,3 +414,53 @@ def test_tax_breakdown_that_is_not_a_list_is_no_breakdown(breakdown: object) -> 
     assert messages(check_tax({"header": header | {"tax_total": 9}, "lines": lines})) == [
         "tax computed from lines is 4.00, invoice says 9"
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Numbers of absurd size
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1e100", Decimal("1e100")),
+        ("9.99e100", Decimal("9.99e100")),
+        ("1e101", None),
+        ("1e999999", None),
+        ("-1e999999999", None),
+        ("1e-100", Decimal("1e-100")),
+        ("1e-101", None),
+        ("0E-999999999", None),
+        ("0." + "0" * 99 + "1", Decimal("1e-100")),  # 100 digits after the point
+        ("0." + "0" * 100 + "1", None),  # 101
+        (12.5, Decimal("12.5")),
+    ],
+)
+def test_dec_treats_a_number_of_absurd_size_as_missing(
+    value: object, expected: Decimal | None
+) -> None:
+    assert dec(value) == expected
+
+
+def test_numbers_of_absurd_size_from_the_model_do_not_crash_the_checks() -> None:
+    # The product of two such numbers overflows the decimal context, and printing one in
+    # full for the presence checks would take a billion digits.
+    doc = parse_json(
+        '{"header": {"supplier_name": "ACME", "subtotal": "9e999999", "tax_total": "9e999999",'
+        ' "total": "1e999999999", "tax_breakdown": [{"rate": 20, "base": "1e999999", "tax": 4}]},'
+        ' "lines": [{"line_no": 1, "sku": "SKU-001", "quantity": "1e999999", "unit_price": 10,'
+        ' "amount": "1e-999999999", "tax_rate": "1e999999", "page": 1}],'
+        ' "checkpoints": [{"amount": "1e999999", "after_line": 1, "page": 1}]}'
+    )
+    assert doc is not None
+    ev = build(["SKU-001 Item 1 2 10.00 20.00\nTotal 24.00 INV-1"], "text_layer")
+    assert messages(check_doc_sums(doc)) == ["totals are missing in the header"]
+    assert messages(check_line_math(doc)) == [
+        "quantity, unit price or amount is missing or is not a usable number"
+    ]
+    assert check_tax(doc) == []
+    assert check_checkpoints(doc) == []
+    assert check_header_grounding(doc, ev) == []
+    assert check_coverage(doc, ev) == []
+    assert check_grounding(doc, ev) == []  # the sku is on a row; no other value is known

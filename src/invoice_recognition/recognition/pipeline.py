@@ -45,6 +45,8 @@ request.
 import asyncio
 import logging
 import time
+import weakref
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Executor
 from dataclasses import asdict, dataclass, field
@@ -56,6 +58,7 @@ import httpx
 from PIL import Image
 
 from invoice_recognition.llm import (
+    PDF_NATIVE,
     ContentPart,
     LLMResult,
     complete,
@@ -156,6 +159,96 @@ class DeadlinePassed(Exception):
     """The overall deadline of the document passed before a request could be sent."""
 
 
+class _Waiting:
+    """Who wants the request slots shared by every document given the same semaphore.
+
+    ordinary: requests of a first reader that want a slot and hold none yet - waiting for
+    a slot, or for their document's own limit. starting: documents whose first requests
+    exist as tasks that have not all run yet, so have not asked for their slots yet.
+    optional: the optional requests (second readings) waiting for a slot. held: the slots
+    optional requests hold now; cap: the most they may hold at once - half of the slots
+    (at least one), so that a first-reader request that comes late always finds slots no
+    optional request can take."""
+
+    def __init__(self, size: int) -> None:
+        self.ordinary = 0
+        self.starting = 0
+        self.optional: deque[asyncio.Future[None]] = deque()
+        self.held = 0
+        self.cap = max(1, size // 2)
+
+    def free_for_optional(self, slots: asyncio.Semaphore) -> bool:
+        return (
+            self.ordinary == 0
+            and self.starting == 0
+            and self.held < self.cap
+            and not slots.locked()
+        )
+
+    def wake(self) -> None:
+        """Let every optional request look again whether it may take a slot."""
+        while self.optional:
+            waiter = self.optional.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def started(self) -> None:
+        self.starting -= 1
+        if self.starting == 0:
+            self.wake()
+
+
+# One entry per semaphore of shared slots, for as long as somebody holds the semaphore:
+# the documents that share the slots share this too.
+_WAITING: weakref.WeakKeyDictionary[asyncio.Semaphore, _Waiting] = weakref.WeakKeyDictionary()
+
+
+def _waiting(slots: asyncio.Semaphore) -> _Waiting:
+    found = _WAITING.get(slots)
+    if found is None:
+        # asyncio.Semaphore does not tell its size: it is read from its private counter,
+        # once, when the flow first sees the semaphore. Only the flow takes its slots, so
+        # all are free then; were some taken, the cap would only come out smaller.
+        found = _WAITING[slots] = _Waiting(slots._value)
+    return found
+
+
+def _starting(gate: Gate) -> None:
+    """Call right after the requests a document starts with are created as tasks, before
+    any of them ran: optional requests wait until each of them has asked for its slot.
+    The tasks run in the order they were created, so a callback scheduled now runs after
+    the first step of every one of them."""
+    if gate.slots is not None:
+        waiting = _waiting(gate.slots)
+        waiting.starting += 1
+        asyncio.get_running_loop().call_soon(waiting.started)
+
+
+async def _optional_slot(slots: asyncio.Semaphore, waiting: _Waiting) -> None:
+    """Take a shared slot for an optional request without making an ordinary request of
+    any document sharing the slots wait for it: only while no ordinary request wants one
+    (waiting for a slot, or for its document's own limit), no document is starting, and
+    optional requests hold fewer than half of the slots.
+
+    So an ordinary request never waits for an optional one that has not been sent. The
+    requests a document starts with, and those of every document started in the same
+    step of the event loop, are counted before an optional request can look. A first
+    reader's retry asks for its slot in the step in which its own attempt gives one back,
+    before any optional request can run.
+
+    An ordinary request sent after a pause in which nothing wanted a slot - a document
+    whose local work ends later, or the pages a text-layer document reads after its layout
+    answer - finds at least half of the slots out of reach of optional requests. It waits
+    for an optional request already sent (at most that request's timeout) only when it
+    needs more than those, and the other first readers hold the rest."""
+    while not waiting.free_for_optional(slots):
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        waiting.optional.append(waiter)
+        await waiter
+    await slots.acquire()  # free, and nobody waits for it: taken at once
+    waiting.held += 1
+
+
 @dataclass
 class Gate:
     """What every model request of one process() call passes before it is sent.
@@ -185,39 +278,73 @@ class Gate:
             return True
         return False
 
-    async def enter(self, own: asyncio.Semaphore | None) -> None:
+    async def enter(self, own: asyncio.Semaphore | None, optional: bool = False) -> None:
         """Wait for the document's own limit, then for a shared slot: always in this
         order, so that no two requests hold one each and wait for the other.
+
+        optional: a request nothing depends on (a second reading). It takes a shared slot
+        only when no ordinary request wants one, and optional requests hold fewer than
+        half of the slots (_optional_slot). Without shared slots there is nothing to
+        yield.
 
         Only these waits are bounded by the deadline, never the request itself: a request
         that is sent runs to its own timeout (which _call shortens to the deadline), so its
         attempt, tokens and cost are kept. Raises DeadlinePassed, holding nothing, when the
         deadline has passed or passes while waiting."""
         held: list[asyncio.Semaphore] = []
+        waiting = None if self.slots is None else _waiting(self.slots)
+        ordinary = waiting is not None and not optional
+        if waiting is not None and ordinary:
+            waiting.ordinary += 1
         try:
             if self.passed():
                 raise DeadlinePassed
             async with asyncio.timeout(self.remaining()):
-                for sem in (own, self.slots):
-                    if sem is not None:
-                        await sem.acquire()
-                        held.append(sem)
+                if own is not None:
+                    await own.acquire()
+                    held.append(own)
+                if self.slots is not None and waiting is not None:
+                    if ordinary:
+                        await self.slots.acquire()
+                    else:
+                        await _optional_slot(self.slots, waiting)
+                    held.append(self.slots)
             if self.passed():
                 raise DeadlinePassed
         except TimeoutError, DeadlinePassed:
-            for sem in held:
-                sem.release()
+            self._give_back(held, waiting, optional)
             self.hit = True
             raise DeadlinePassed from None
         except BaseException:  # cancelled while waiting: give back what was taken
-            for sem in held:
-                sem.release()
+            self._give_back(held, waiting, optional)
             raise
+        finally:
+            if waiting is not None and ordinary:
+                waiting.ordinary -= 1
+                if waiting.ordinary == 0 and not held:
+                    # It gave up its place: a slot may be free with no release to come.
+                    waiting.wake()
 
-    def leave(self, own: asyncio.Semaphore | None) -> None:
+    def _give_back(
+        self, held: list[asyncio.Semaphore], waiting: _Waiting | None, optional: bool
+    ) -> None:
+        for sem in held:
+            sem.release()
+        if waiting is not None and self.slots in held:
+            if optional:
+                waiting.held -= 1
+            waiting.wake()
+        held.clear()
+
+    def leave(self, own: asyncio.Semaphore | None, optional: bool = False) -> None:
         for sem in (self.slots, own):
             if sem is not None:
                 sem.release()
+        if self.slots is not None:
+            waiting = _waiting(self.slots)
+            if optional:
+                waiting.held -= 1
+            waiting.wake()
 
 
 async def _call(
@@ -230,9 +357,13 @@ async def _call(
     *,
     gate: Gate | None = None,
     own: asyncio.Semaphore | None = None,
+    plugins: list[JSONObject] | None = None,
+    optional: bool = False,
 ) -> LLMResult:
     """complete() that never raises: whatever goes wrong inside one request is
     that request's error, not the document's. part=None: a text-only request.
+    plugins: OpenRouter plugins of the request (None: none, the body as before).
+    optional: a request that yields every shared slot to the others (Gate.enter).
 
     Every wait before a request happens here: for `own`, the limit of the document on its
     page requests (None for the header and the layout), and for a shared slot of the
@@ -240,7 +371,7 @@ async def _call(
     request that is sent ends at the deadline at the latest."""
     if gate is None:
         gate = Gate()
-    await gate.enter(own)
+    await gate.enter(own, optional)
     try:
         left = gate.remaining()
         return await complete(
@@ -250,12 +381,13 @@ async def _call(
             [part] if part else [],
             max_tokens=max_tokens,
             timeout_s=timeout_s if left is None else min(timeout_s, left),
+            plugins=plugins,
         )
     except Exception as e:  # fault boundary: one request
         logger.warning("request to %s failed", model, exc_info=True)
         return LLMResult(model=model, error=f"{type(e).__name__}: {e}")
     finally:
-        gate.leave(own)
+        gate.leave(own, optional)
 
 
 def _attempt(res: LLMResult, lines: int, issues: int) -> Attempt:
@@ -401,6 +533,98 @@ async def read_page(
             )
         )
     return best
+
+
+def _other_model_extra(part: ContentPart) -> list[JSONObject] | None:
+    """The plugins of a request to a model of another provider: a PDF must reach it as the
+    file, not as the text of OpenRouter's OCR of it. None for an image."""
+    return PDF_NATIVE if part.get("type") == "file" else None
+
+
+async def read_second(
+    client: httpx.AsyncClient,
+    model: str,
+    part: ContentPart,
+    page: int,
+    total: int,
+    cfg: Config,
+    own: asyncio.Semaphore,
+    gate: Gate,
+) -> tuple[Attempt | None, list[Line] | None]:
+    """Read one page of a scan once more, by `model`, for comparison with the first
+    reading (second_reading.py). One request, no retry: EXTRACT_PAGE, to the byte (never
+    the "carry_in" prompt), the same file part as the first reader got.
+
+    Returns the attempt (None: not sent, the deadline passed first) and the lines as the
+    flow keeps a page - line items only, the quantity repair applied - or None when the
+    answer cannot be compared: an error, a timeout, an answer that is not valid JSON or
+    was cut at the token limit (its missing rows would all look like disagreements), or
+    no list of rows. The lines of a broken answer are never salvaged.
+
+    own and gate: the document's limit on second readings and a gate of their own that
+    shares the document's slots and deadline. The request is optional: it takes a shared
+    slot only when no request of a first reader wants one (Gate.enter). A second reading
+    stopped by the deadline is never the document's deadline_exceeded: nothing reads that
+    gate's hit."""
+    try:
+        res = await _call(
+            client,
+            model,
+            EXTRACT_PAGE.format(page=page, total=total),
+            part,
+            cfg.second_reading_max_tokens,
+            cfg.second_reading_timeout_s,
+            gate=gate,
+            own=own,
+            plugins=_other_model_extra(part),
+            optional=True,
+        )
+    except DeadlinePassed:
+        return None, None
+    answer = None if res.error or res.finish_reason == "length" else parse_json(res.text)
+    rows = (answer or {}).get("rows")
+    if not isinstance(rows, list):
+        return _attempt(res, 0, 0), None
+    lines, _ = rows_to_page(rows, page)
+    repair(lines)
+    return _attempt(res, len(lines), 0), lines
+
+
+def _pages(pages: list[int]) -> tuple[str, bool]:
+    """("Page 3", True) or ("Pages 2 and 4–5", False)."""
+    if len(pages) == 1:
+        return f"Page {pages[0]}", True
+    return f"Pages {page_ranges(pages)}", False
+
+
+def second_reading_note(unanswered: list[int], unusable: list[int]) -> JSONObject:
+    """The one note for the pages of a scan that were to be read a second time and got no
+    second reading to compare: unanswered - the request failed, timed out or was not sent
+    before the deadline; unusable - an answer came, but not one that can be compared.
+    Their status is what it would be without the second reading."""
+    text = []
+    if unanswered:
+        pages, one = _pages(unanswered)
+        text.append(
+            f"{pages} {'was' if one else 'were'} not read a second time: the other model did "
+            "not answer, or not in time."
+        )
+    if unusable:
+        pages, one = _pages(unusable)
+        text.append(
+            f"{pages} {'has' if one else 'have'} no usable second reading: the other model's "
+            "answer was broken or had no line items."
+        )
+    every = sorted({*unanswered, *unusable})
+    which = "this page" if len(every) == 1 else "these pages"
+    text.append(f"Nothing else checks the item codes (SKUs) on {which}.")
+    return {
+        "page": None,
+        "kind": "second_reading_missing",
+        "text": " ".join(text),
+        "source": "second_reading",
+        "pages": every,
+    }
 
 
 def deadline_unread_text(page: int, lines: int) -> str:
@@ -1275,6 +1499,30 @@ async def _read(
     # The "carry_in" field is asked for only where a previous page can exist. A photo and
     # a one-page PDF keep the request they always had, to the byte.
     carry = cfg.carry_in and prep.is_pdf and n > 1
+    # A second reading by another model: only a PDF read without a text layer (a scan),
+    # only the pages sent to the model, and not a page with a quality warning - it already
+    # goes to a person, and the second reader was never measured on such pages.
+    second_pages: list[int] = []
+    second_model = cfg.second_reading_model
+    if second_model is not None and prep.is_pdf and evidence is None:
+        doubtful = set(scan_issues) - set(skipped)
+        second_pages = [p for p in range(1, n + 1) if p not in skipped and p not in doubtful]
+    # Second readings have a limit of their own, so a retry of the first reader never
+    # waits behind them for the document's; they yield every shared slot to the first
+    # readers (Gate.enter). They share the deadline, but not its verdict.
+    second_sem = asyncio.Semaphore(cfg.concurrency)
+    second_gate = Gate(gate.slots, gate.deadline)
+
+    async def second(p: int) -> tuple[Attempt | None, list[Line] | None]:
+        if second_model is None:  # second_pages is empty then
+            return None, None
+        try:
+            return await read_second(
+                client, second_model, parts[p - 1], p, n, cfg, second_sem, second_gate
+            )
+        except Exception:  # fault boundary: a second reading never fails the document
+            logger.warning("page %d could not be read a second time", p, exc_info=True)
+            return None, None
 
     async def one(p: int, announce: bool = True, with_carry: bool | None = None) -> PageResult:
         if p in skipped:  # a page of a scan that is blank or too blurred to read: no request
@@ -1297,12 +1545,21 @@ async def _read(
     layout_issues: list[Issue] = []
     notes: list[JSONObject] = list(scan_notes)
     read_by_code: tuple[lay.Parsed, lay.Layout] | None = None  # framed after reading
+    seconds: list[tuple[Attempt | None, list[Line] | None]] = []
     if not cfg.use_layout or text_pages is None or evidence is None:
-        first, *rest = await asyncio.gather(
-            read_header(client, header_part, cfg, gate=gate), *(one(p) for p in range(1, n + 1))
+        # The second readings are tasks of their own, next to the pages: a page is settled
+        # (and on_page called) without waiting for its second reading.
+        reading = asyncio.gather(
+            read_header(client, header_part, cfg, gate=gate),
+            *(one(p) for p in range(1, n + 1)),
+            *(second(p) for p in second_pages),
         )
+        _starting(gate)
+        first, *rest = await reading
+        # gather() of awaitables of different types gives a list of their union.
         header, header_attempts, header_read = cast(tuple[Header, list[Attempt], bool], first)
-        pages = cast(list[PageResult], rest)
+        pages = cast(list[PageResult], rest[:n])
+        seconds = cast(list[tuple[Attempt | None, list[Line] | None]], rest[n:])
     else:
         # The page shown to the layout model and read by the witness: the first one with
         # rows that look like items.
@@ -1313,15 +1570,17 @@ async def _read(
             # found by code, nothing more.
             return await one(wp, announce=False, with_carry=False) if cfg.layout_witness else None
 
-        (
-            (header, header_attempts, header_read),
-            (raw, layout_attempts, error),
-            seen,
-        ) = await asyncio.gather(
+        beginning = asyncio.gather(
             read_header(client, header_part, cfg, gate=gate),
             ask_layout(client, lay.layout_request(text_pages, wp), cfg, gate=gate),
             witness(),
         )
+        _starting(gate)
+        (
+            (header, header_attempts, header_read),
+            (raw, layout_attempts, error),
+            seen,
+        ) = await beginning
         by_code: dict[int, PageResult] | None = None
         if error is None:
             try:
@@ -1349,9 +1608,11 @@ async def _read(
             # Fallback for the whole document: every page by the model; the witness page is
             # already read.
             notes = []
-            others = await asyncio.gather(
+            reading_rest = asyncio.gather(
                 *(one(p) for p in range(1, n + 1) if seen is None or p != wp)
             )
+            _starting(gate)
+            others = await reading_rest
             pages = sorted([*others, *([seen] if seen else [])], key=lambda r: r.page)
             if seen and on_page:
                 on_page(seen)
@@ -1411,7 +1672,9 @@ async def _read(
                     on_page(chosen)
                 return chosen
 
-            pages = list(await asyncio.gather(*(settle(p) for p in range(1, n + 1))))
+            settling = asyncio.gather(*(settle(p) for p in range(1, n + 1)))
+            _starting(gate)
+            pages = list(await settling)
             kept = {p.page for p in pages if p.method == "layout"}
             notes = [note for note in notes if note["page"] in kept]
     layout_info |= {
@@ -1430,6 +1693,15 @@ async def _read(
                 {"page": None, "kind": "carry_join_failed", "text": failure, "source": "carry_in"}
             ]
     notes += [stronger_model_note(p) for p in pages if p.stronger_model]
+    unanswered: list[int] = []
+    unusable: list[int] = []
+    for p, (attempt, read) in zip(second_pages, seconds, strict=True):
+        pages[p - 1].second_reading = attempt
+        if read is None:
+            answered = attempt is not None and attempt.error is None
+            (unusable if answered else unanswered).append(p)
+    if unanswered or unusable:
+        notes.append(second_reading_note(unanswered, unusable))
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []
@@ -1466,6 +1738,7 @@ async def _read(
     line_boxes = await _frame_lines(pages, prep, code_read, lane, gate)
 
     all_attempts = header_attempts + layout_attempts + [a for p in pages for a in p.attempts]
+    all_attempts += [p.second_reading for p in pages if p.second_reading is not None]
     if unread or not lines or not header:
         status = "failed"
     else:

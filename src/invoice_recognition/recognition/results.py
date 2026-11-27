@@ -46,6 +46,10 @@ class PageResult:
     # sent, or every one was cut short. The page has a "page_read" issue saying so and the
     # document is "failed". Not in Result.to_json().
     deadline_unread: bool = False
+    # The request that read this page of a scan a second time, by another model
+    # (Config.second_reading_model); None when none was sent. Not one of `attempts`: those
+    # are the attempts at the page, and the result keeps their lines.
+    second_reading: Attempt | None = None
 
 
 @dataclass
@@ -88,6 +92,9 @@ class Result:
     #   none is called, to save cost
     #   a page of a scan that has no text and was not sent to the model
     #   (source: "scan_quality"): page_without_text
+    #   pages of a scan that were to be read a second time by another model and were not
+    #   compared with it (source: "second_reading"): second_reading_missing, "page" is
+    #   None, + "pages"; one note for the document
     notes: list[JSONObject] = field(default_factory=list)
     # {} when nothing was measured: a PDF with a text layer, a PDF none of whose pages
     # carries an image, or the check switched off (Config.photo_quality / scan_quality).
@@ -154,15 +161,21 @@ class Result:
             "notes": self.notes,
             "quality": self.quality,
             "layout_attempts": [asdict(a) for a in self.layout_attempts],
-            "pages": [
-                {
-                    "page": p.page,
-                    "lines": len(p.lines),
-                    "repaired": p.repaired,
-                    "method": p.method,
-                    "issues": [i.to_json() for i in p.issues],
-                    "attempts": [asdict(a) for a in p.attempts],
-                }
-                for p in self.pages
-            ],
+            "pages": [_page_json(p) for p in self.pages],
         }
+
+
+def _page_json(p: PageResult) -> JSONObject:
+    out: JSONObject = {
+        "page": p.page,
+        "lines": len(p.lines),
+        "repaired": p.repaired,
+        "method": p.method,
+        "issues": [i.to_json() for i in p.issues],
+        "attempts": [asdict(a) for a in p.attempts],
+    }
+    # Only when the page was read a second time: a page that was not has the keys it
+    # always had.
+    if p.second_reading is not None:
+        out["second_reading"] = asdict(p.second_reading)
+    return out

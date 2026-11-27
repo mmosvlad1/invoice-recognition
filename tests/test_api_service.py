@@ -121,6 +121,11 @@ async def test_the_flow_gets_the_settings_the_lane_and_the_shared_limit(
     assert service.request_slots._value == 7  # the semaphore's own count, nothing else shows it
 
 
+def test_the_pixel_cap_of_the_upload_checks_holds_for_the_pages_of_a_scan() -> None:
+    assert sv.config(api_settings(max_image_pixels=1234)).max_image_pixels == 1234
+    assert sv.config(api_settings()).max_image_pixels == 50_000_000
+
+
 def test_the_default_models_are_the_cheap_one() -> None:
     cfg = sv.config(api_settings())
     assert cfg.page_models == (FAST, FAST) and cfg.header_model == cfg.layout_model == FAST

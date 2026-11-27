@@ -41,6 +41,8 @@ def config(settings: Settings) -> Config:
         header_model=settings.header_model,
         layout_model=settings.layout_model,
         deadline_s=settings.deadline_s,
+        # The cap the upload checks hold an image to holds the images of a scanned page too.
+        max_image_pixels=settings.max_image_pixels,
     )
 
 

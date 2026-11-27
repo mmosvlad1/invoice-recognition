@@ -10,7 +10,7 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_core import PydanticCustomError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from invoice_recognition.recognition.config import FAST
+from invoice_recognition.recognition.config import FAST, MAX_IMAGE_PIXELS
 
 
 class Settings(BaseSettings):
@@ -19,6 +19,18 @@ class Settings(BaseSettings):
 
     openrouter_api_key: SecretStr = Field(
         description="The OpenRouter API key every model request is sent with. Required."
+    )
+
+    # The checks of an upload.
+    max_file_bytes: int = Field(
+        default=10 * 1024 * 1024, ge=1, description="The largest file an upload may carry."
+    )
+    max_pages: int = Field(default=50, ge=1, description="The most pages a PDF may have.")
+    max_image_pixels: int = Field(
+        default=MAX_IMAGE_PIXELS,
+        ge=1,
+        description="The most pixels an image may have: an uploaded photo, or the images of "
+        "one page of a scan.",
     )
 
     # The reading of documents.

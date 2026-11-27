@@ -52,6 +52,10 @@ TOO_MANY_PAGES = (
     "The PDF has {pages} pages; the limit is {limit}. Split the file and upload the parts."
 )
 IMAGE_DAMAGED = "The image could not be opened. It may be damaged or incomplete."
+TOO_MANY_DOCUMENTS = (
+    "The server is busy with other documents: at most {limit} can wait or be read at once. "
+    "Please try again shortly."
+)
 IMAGE_TOO_LARGE = (
     "The image has more pixels than can be read; the limit is {limit}. "
     "Save the image at a lower resolution."

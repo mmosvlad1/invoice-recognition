@@ -35,7 +35,8 @@ LANE = "lane"
 
 def config(settings: Settings) -> Config:
     """The flow's settings for every document. A page that fails its checks is read once
-    more by the same model, as in every measured run."""
+    more by the same model, as in every measured run. Scans are read a second time only when
+    SECOND_READING_MODEL names a model (off by default)."""
     return Config(
         page_models=(settings.page_model, settings.page_model),
         header_model=settings.header_model,
@@ -43,6 +44,7 @@ def config(settings: Settings) -> Config:
         deadline_s=settings.deadline_s,
         # The cap the upload checks hold an image to holds the images of a scanned page too.
         max_image_pixels=settings.max_image_pixels,
+        second_reading_model=settings.second_reading_model.strip() or None,
     )
 
 

@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     layout_model: str = Field(
         default=FAST, min_length=1, description="Describes the table of a PDF with a text layer."
     )
+    second_reading_model: str = Field(
+        default="",
+        description="Reads every page of a scan a second time; a line item the two models "
+        "read differently is flagged for a person. Empty (the default): off.",
+    )
 
     @field_validator("openrouter_api_key")
     @classmethod

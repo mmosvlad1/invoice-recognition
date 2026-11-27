@@ -1,0 +1,497 @@
+{
+ "name": "scan_retries",
+ "input_sha256": "8090ce7ccbe3fba5827da4c2d082e98949bdb2b8db4d703a06973042081d78a8",
+ "config": {},
+ "result": {
+  "status": "needs_review",
+  "header": {
+   "supplier_name": "ACME Ltd",
+   "invoice_number": "INV-1",
+   "currency": "EUR",
+   "subtotal": 130.0,
+   "tax_total": 26.0,
+   "total": 156.0
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "SKU-001",
+    "description": "Item 1",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 1
+   },
+   {
+    "line_no": 2,
+    "sku": "SKU-002",
+    "description": "Item 2 zinc plated",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 99.0,
+    "page": 1
+   },
+   {
+    "line_no": 3,
+    "sku": "SKU-003",
+    "description": "Item 3",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 2
+   },
+   {
+    "line_no": 4,
+    "sku": "SKU-004",
+    "description": "Item 4",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 2
+   },
+   {
+    "line_no": 5,
+    "sku": "SKU-005",
+    "description": "Item 5",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 3
+   },
+   {
+    "line_no": 6,
+    "sku": "SKU-006",
+    "description": "Item 6",
+    "quantity": 3,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 30.0,
+    "page": 3
+   }
+  ],
+  "checkpoints": [],
+  "issues": [
+   {
+    "check": "line_math",
+    "message": "2 x 10.0 = 20.00, but amount is 99.0",
+    "line": 1,
+    "page": 1,
+    "severity": "error",
+    "line_no": 2
+   },
+   {
+    "check": "rows_dropped",
+    "message": "1 row(s) of the answer have neither sku nor amount and were left out",
+    "line": null,
+    "page": 2,
+    "severity": "error"
+   },
+   {
+    "check": "doc_sums",
+    "message": "lines add up to 209.0, invoice subtotal is 130.0 (difference 79.0)",
+    "line": null,
+    "page": null,
+    "severity": "error"
+   },
+   {
+    "check": "tax",
+    "message": "tax computed from lines is 41.80, invoice says 26.0",
+    "line": null,
+    "page": null,
+    "severity": "error"
+   }
+  ],
+  "evidence_source": null,
+  "calls": 8,
+  "cost_usd": 0.007,
+  "cost_unknown_calls": 1,
+  "prompt_tokens": 800,
+  "completion_tokens": 400,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   },
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "model",
+  "layout": {
+   "status": "off",
+   "reason": "no text layer",
+   "pages_layout": 0,
+   "pages_model": 3
+  },
+  "notes": [
+   {
+    "page": 2,
+    "kind": "joined_across_pages",
+    "text": "zinc plated",
+    "source": "carry_in",
+    "to_page": 1,
+    "line": 1,
+    "line_no": 2,
+    "sku": "SKU-002"
+   }
+  ],
+  "quality": {},
+  "layout_attempts": [],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 2,
+    "repaired": 0,
+    "method": "model",
+    "issues": [
+     {
+      "check": "line_math",
+      "message": "2 x 10.0 = 20.00, but amount is 99.0",
+      "line": 1,
+      "page": 1,
+      "severity": "error",
+      "line_no": 2
+     }
+    ],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 1,
+      "error": null,
+      "cost_known": true
+     },
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 1,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 2,
+    "lines": 2,
+    "repaired": 0,
+    "method": "model",
+    "issues": [
+     {
+      "check": "rows_dropped",
+      "message": "1 row(s) of the answer have neither sku nor amount and were left out",
+      "line": null,
+      "page": 2,
+      "severity": "error"
+     }
+    ],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 1,
+      "error": null,
+      "cost_known": true
+     },
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 1,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 3,
+    "lines": 2,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 1,
+      "issues": 1,
+      "error": null,
+      "cost_known": true
+     },
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.0,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 0,
+      "error": null,
+      "cost_known": false
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "a2abfdd4b84a221cfd3b9aa80f5796da19093b6a91cc2a2758041a14321897ef"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "a2abfdd4b84a221cfd3b9aa80f5796da19093b6a91cc2a2758041a14321897ef"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 3. The other pages are read",
+       "sha256": "baabfc5c01f0efe98f968196d7856ee0084cbd6ef58e30da3887da9a9ce8e8ac"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 3. The other pages are read",
+       "sha256": "baabfc5c01f0efe98f968196d7856ee0084cbd6ef58e30da3887da9a9ce8e8ac"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 2 of 3. The other pages are read",
+       "sha256": "4de46641ed5a2866c16ed61e0dfdb3211ef8a3de181b0fe785c546e37a9b74b3"
+      },
+      {
+       "type": "file",
+       "filename": "page2.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 2 of 3. The other pages are read",
+       "sha256": "4de46641ed5a2866c16ed61e0dfdb3211ef8a3de181b0fe785c546e37a9b74b3"
+      },
+      {
+       "type": "file",
+       "filename": "page2.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 3 of 3. The other pages are read",
+       "sha256": "3e6be5ed83db1aec84e647ea4bd997e1c74bb6e405da2045bfd2b9f21a8f214d"
+      },
+      {
+       "type": "file",
+       "filename": "page3.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 3 of 3. The other pages are read",
+       "sha256": "3e6be5ed83db1aec84e647ea4bd997e1c74bb6e405da2045bfd2b9f21a8f214d"
+      },
+      {
+       "type": "file",
+       "filename": "page3.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

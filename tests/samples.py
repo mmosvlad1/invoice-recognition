@@ -17,7 +17,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from invoice_recognition.shapes import Header, JSONObject, Line
+# The JSON shapes of the package, spelled out: this module imports nothing from the
+# package, so a reference run of other code can load the same samples.
+type JSONObject = dict[str, Any]
+type Header = dict[str, Any]
+type Line = dict[str, Any]
 
 FIXTURES = Path(__file__).parent / "fixtures"
 INVOICES = FIXTURES / "invoices"
@@ -92,7 +96,7 @@ def _num(v: Any) -> Decimal | None:
         return None
     try:
         return Decimal(str(v).strip().rstrip("%"))
-    except InvalidOperation, ValueError:
+    except InvalidOperation:
         return None
 
 

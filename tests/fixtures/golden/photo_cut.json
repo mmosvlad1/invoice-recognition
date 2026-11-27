@@ -1,0 +1,90 @@
+{
+ "name": "photo_cut",
+ "input_sha256": "3c58d19bcd5f38f9609839d1a003f30e064469c735eb6399293b47f5c574bdd0",
+ "config": {},
+ "result": {
+  "status": "failed",
+  "header": {},
+  "lines": [],
+  "checkpoints": [],
+  "issues": [
+   {
+    "check": "photo_text_at_edge",
+    "message": "Text reaches the edge of the frame (right side), 0.83 text heights from it: part of the document is outside the photo. No request was sent.",
+    "line": null,
+    "page": 1,
+    "severity": "error"
+   }
+  ],
+  "evidence_source": null,
+  "calls": 0,
+  "cost_usd": 0.0,
+  "cost_unknown_calls": 0,
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "header_attempts": [],
+  "method": "model",
+  "layout": {},
+  "notes": [],
+  "quality": {
+   "verdict": "reject",
+   "reasons": [
+    {
+     "code": "text_at_edge",
+     "severity": "reject",
+     "value": 0.83,
+     "side": "right"
+    }
+   ],
+   "measures": {
+    "width": 480,
+    "height": 800,
+    "sheet": {
+     "found": true,
+     "area": 0.7409,
+     "touch": {
+      "top": 0.0,
+      "bottom": 0.0,
+      "left": 0.0,
+      "right": 0.85
+     },
+     "free_corners": 2
+    },
+    "text": {
+     "boxes": 108,
+     "height_px": 8.7,
+     "height_norm": 29.0,
+     "edge_margin": {
+      "top": 12.8276,
+      "left": 11.6207,
+      "bottom": 19.4138,
+      "right": 0.8276
+     },
+     "edge_sharpness": 7.24,
+     "text_laplacian": 1171.5497,
+     "contrast": 195.0
+    },
+    "light": {
+     "paper_level": 235.0,
+     "paper_level_low": 235.0,
+     "glare": 0.0
+    },
+    "text_sharpness": 1379.448
+   },
+   "limits": {
+    "sheet_touch": 0.005,
+    "text_margin_cut": 1.5,
+    "text_margin_unseen": 0.5,
+    "sharpness_reject": 140.0,
+    "sharpness_warn": 450.0,
+    "paper_level": 150.0,
+    "glare": 0.01,
+    "text_height_px": 0.0,
+    "min_boxes": 5
+   }
+  },
+  "layout_attempts": [],
+  "pages": []
+ },
+ "requests": []
+}

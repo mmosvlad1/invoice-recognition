@@ -18,7 +18,8 @@ from invoice_recognition.recognition.prompts import EXTRACT_PAGE
 from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject, Line
 
-from fakes import Answer, Server, header_for, jpeg, line, photo, recording, run, scan, sse
+from drawn import jpeg, photo, scan
+from fakes import Answer, Server, header_for, line, recording, run, sse
 from samples import exact, saved_layout, saved_scan_pages, truth, truth_doc
 
 

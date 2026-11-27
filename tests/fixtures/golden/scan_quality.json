@@ -1,0 +1,442 @@
+{
+ "name": "scan_quality",
+ "input_sha256": "9a8a8b6172791477811e23af224c624ed3f51a2f9ea2c295d52ae7f72d3f81fd",
+ "config": {},
+ "result": {
+  "status": "needs_review",
+  "header": {
+   "supplier_name": "ACME Ltd",
+   "invoice_number": "INV-1",
+   "currency": "EUR",
+   "subtotal": 60.0,
+   "tax_total": 12.0,
+   "total": 72.0
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "SKU-001",
+    "description": "Item 1",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 1
+   },
+   {
+    "line_no": 2,
+    "sku": "SKU-002",
+    "description": "Item 2",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 1
+   },
+   {
+    "line_no": 3,
+    "sku": "SKU-003",
+    "description": "Item 3",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 4
+   }
+  ],
+  "checkpoints": [],
+  "issues": [
+   {
+    "check": "scan_blurred",
+    "message": "Text sharpness 3.9 of the page is below 100. The page was not sent to the model.",
+    "line": null,
+    "page": 2,
+    "severity": "error"
+   },
+   {
+    "check": "scan_blurred",
+    "message": "Text sharpness 133.0 of the page is below 200.",
+    "line": null,
+    "page": 4,
+    "severity": "warning"
+   }
+  ],
+  "evidence_source": null,
+  "calls": 3,
+  "cost_usd": 0.003,
+  "cost_unknown_calls": 0,
+  "prompt_tokens": 300,
+  "completion_tokens": 150,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "model",
+  "layout": {
+   "status": "off",
+   "reason": "no text layer",
+   "pages_layout": 0,
+   "pages_model": 2
+  },
+  "notes": [
+   {
+    "page": 3,
+    "kind": "page_without_text",
+    "source": "scan_quality"
+   }
+  ],
+  "quality": {
+   "verdict": "warn",
+   "reasons": [
+    {
+     "code": "blurred",
+     "severity": "reject",
+     "value": 3.9,
+     "page": 2
+    },
+    {
+     "code": "no_text",
+     "severity": "skip",
+     "value": 0.0,
+     "page": 3
+    },
+    {
+     "code": "blurred",
+     "severity": "warn",
+     "value": 133.0,
+     "page": 4
+    }
+   ],
+   "pages": [
+    {
+     "page": 1,
+     "verdict": "ok",
+     "reasons": [],
+     "measures": {
+      "width": 600,
+      "height": 800,
+      "density": 1.0,
+      "text": {
+       "boxes": 90,
+       "height_px": 8.625,
+       "height_norm": 23.0,
+       "edge_margin": {
+        "top": 7.1739,
+        "left": 4.7391,
+        "bottom": 13.5217,
+        "right": 11.7826
+       },
+       "edge_sharpness": 6.6069,
+       "text_laplacian": 1400.8034,
+       "contrast": 195.0
+      },
+      "light": {
+       "paper_level": 245.0,
+       "paper_level_low": 245.0,
+       "glare": 0.0
+      },
+      "ink": 0.0343,
+      "dpi": 72.0,
+      "text_sharpness": 1517.4884,
+      "contrast": 0.7959
+     }
+    },
+    {
+     "page": 2,
+     "verdict": "reject",
+     "reasons": [
+      {
+       "code": "blurred",
+       "severity": "reject",
+       "value": 3.9
+      }
+     ],
+     "measures": {
+      "width": 600,
+      "height": 800,
+      "density": 1.0,
+      "text": {
+       "boxes": 90,
+       "height_px": 8.25,
+       "height_norm": 22.0,
+       "edge_margin": {
+        "top": 7.5,
+        "left": 4.7727,
+        "bottom": 14.1818,
+        "right": 12.0909
+       },
+       "edge_sharpness": 1.2971,
+       "text_laplacian": 3.6097,
+       "contrast": 53.5
+      },
+      "light": {
+       "paper_level": 245.0,
+       "paper_level_low": 245.0,
+       "glare": 0.0
+      },
+      "ink": 0.0412,
+      "dpi": 72.0,
+      "text_sharpness": 3.9104,
+      "contrast": 0.2184
+     }
+    },
+    {
+     "page": 3,
+     "verdict": "empty",
+     "reasons": [
+      {
+       "code": "no_text",
+       "severity": "skip",
+       "value": 0.0
+      }
+     ],
+     "measures": {
+      "width": 600,
+      "height": 800,
+      "density": 1.0,
+      "text": {
+       "boxes": 0,
+       "height_px": 0.0,
+       "height_norm": 0.0,
+       "edge_margin": {
+        "top": null,
+        "right": null,
+        "bottom": null,
+        "left": null
+       },
+       "edge_sharpness": 0.0,
+       "text_laplacian": 0.0,
+       "contrast": 0.0
+      },
+      "light": {
+       "paper_level": 250.0,
+       "paper_level_low": 250.0,
+       "glare": 0.0
+      },
+      "ink": 0.0,
+      "dpi": 72.0,
+      "text_sharpness": 0.0,
+      "contrast": 0.0
+     }
+    },
+    {
+     "page": 4,
+     "verdict": "warn",
+     "reasons": [
+      {
+       "code": "blurred",
+       "severity": "warn",
+       "value": 133.0
+      }
+     ],
+     "measures": {
+      "width": 600,
+      "height": 800,
+      "density": 1.0,
+      "text": {
+       "boxes": 90,
+       "height_px": 9.3085,
+       "height_norm": 24.8227,
+       "edge_margin": {
+        "top": 6.6069,
+        "left": 4.3509,
+        "bottom": 12.5289,
+        "right": 10.8369
+       },
+       "edge_sharpness": 3.5601,
+       "text_laplacian": 122.8102,
+       "contrast": 111.5
+      },
+      "light": {
+       "paper_level": 245.0,
+       "paper_level_low": 245.0,
+       "glare": 0.0
+      },
+      "ink": 0.0532,
+      "dpi": 72.0,
+      "text_sharpness": 133.0401,
+      "contrast": 0.4551
+     }
+    }
+   ],
+   "limits": {
+    "sharpness_reject": 100.0,
+    "sharpness_warn": 200.0,
+    "paper_level": 150.0,
+    "min_contrast": 0.1,
+    "blank_ink": 0.001,
+    "min_boxes": 5
+   }
+  },
+  "layout_attempts": [],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 2,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 2,
+    "lines": 0,
+    "repaired": 0,
+    "method": "skipped",
+    "issues": [
+     {
+      "check": "scan_blurred",
+      "message": "Text sharpness 3.9 of the page is below 100. The page was not sent to the model.",
+      "line": null,
+      "page": 2,
+      "severity": "error"
+     }
+    ],
+    "attempts": []
+   },
+   {
+    "page": 3,
+    "lines": 0,
+    "repaired": 0,
+    "method": "skipped",
+    "issues": [],
+    "attempts": []
+   },
+   {
+    "page": 4,
+    "lines": 1,
+    "repaired": 0,
+    "method": "model",
+    "issues": [
+     {
+      "check": "scan_blurred",
+      "message": "Text sharpness 133.0 of the page is below 200.",
+      "line": null,
+      "page": 4,
+      "severity": "warning"
+     }
+    ],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 1,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "1d585a2fc964443af3b8150057bc85fa88388f031a841de5b58f180fc5a1e0c9"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 4. The other pages are read",
+       "sha256": "bee7a27c48fd18a95787aa4d4e508db30bfe5b35dc3af1e8fdfda863d9ca28bc"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "6abf8073da5a3876b67adf27293d59abfe726d03991e89c0bdade6200826fcc8"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 4 of 4. The other pages are read",
+       "sha256": "fc8c23263620c4451fef0f65270ab91ba5e4fe97124d108b6d2fe9ed58943ba0"
+      },
+      {
+       "type": "file",
+       "filename": "page4.pdf",
+       "sha256": "8aeaceca4772cb5ccb7ffbe70df90fc8e714a4c052eaccbbc77c904b7661fc7f"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

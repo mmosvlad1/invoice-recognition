@@ -14,7 +14,8 @@ from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject, Line
 
-from fakes import Answer, Server, codes, header_for, line, run, scan, scan_with_ocr_text, sse
+from drawn import scan, scan_with_ocr_text
+from fakes import Answer, Server, codes, header_for, line, run, sse
 from samples import WITH_LAYOUT, exact, saved_layout, truth_doc
 
 

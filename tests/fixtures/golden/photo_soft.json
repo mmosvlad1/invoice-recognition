@@ -1,0 +1,227 @@
+{
+ "name": "photo_soft",
+ "input_sha256": "40af495cde345a8479d5ffdc4306514a5261c259282bbc92c4c67bae6d85faaa",
+ "config": {},
+ "result": {
+  "status": "needs_review",
+  "header": {
+   "supplier_name": "ACME Ltd",
+   "invoice_number": "INV-1",
+   "currency": "EUR",
+   "subtotal": 60.0,
+   "tax_total": 12.0,
+   "total": 72.0
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "SKU-001",
+    "description": "Item 1",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 1
+   },
+   {
+    "line_no": 2,
+    "sku": "SKU-002",
+    "description": "Item 2",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 1
+   },
+   {
+    "line_no": 3,
+    "sku": "SKU-003",
+    "description": "Item 3",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 1
+   }
+  ],
+  "checkpoints": [],
+  "issues": [
+   {
+    "check": "photo_blurred",
+    "message": "Text sharpness 260.7 is below 450. Numbers are usually still read; item codes (SKUs) may be misread.",
+    "line": null,
+    "page": 1,
+    "severity": "warning"
+   }
+  ],
+  "evidence_source": null,
+  "calls": 2,
+  "cost_usd": 0.002,
+  "cost_unknown_calls": 0,
+  "prompt_tokens": 200,
+  "completion_tokens": 100,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "model",
+  "layout": {
+   "status": "off",
+   "reason": "not a PDF",
+   "pages_layout": 0,
+   "pages_model": 1
+  },
+  "notes": [],
+  "quality": {
+   "verdict": "warn",
+   "reasons": [
+    {
+     "code": "blurred",
+     "severity": "warn",
+     "value": 260.7
+    }
+   ],
+   "measures": {
+    "width": 600,
+    "height": 800,
+    "sheet": {
+     "found": true,
+     "area": 0.6776,
+     "touch": {
+      "top": 0.0,
+      "bottom": 0.0,
+      "left": 0.0,
+      "right": 0.0
+     },
+     "free_corners": 4
+    },
+    "text": {
+     "boxes": 90,
+     "height_px": 9.3169,
+     "height_norm": 24.845,
+     "edge_margin": {
+      "top": 11.9541,
+      "left": 10.8271,
+      "bottom": 18.1123,
+      "right": 11.7126
+     },
+     "edge_sharpness": 4.5312,
+     "text_laplacian": 221.3897,
+     "contrast": 119.0
+    },
+    "light": {
+     "paper_level": 235.0,
+     "paper_level_low": 235.0,
+     "glare": 0.0
+    },
+    "text_sharpness": 260.6766
+   },
+   "limits": {
+    "sheet_touch": 0.005,
+    "text_margin_cut": 1.5,
+    "text_margin_unseen": 0.5,
+    "sharpness_reject": 140.0,
+    "sharpness_warn": 450.0,
+    "paper_level": 150.0,
+    "glare": 0.01,
+    "text_height_px": 0.0,
+    "min_boxes": 5
+   }
+  },
+  "layout_attempts": [],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 3,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 3,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "image_url",
+       "size": [
+        478,
+        678
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 1. The other pages are read",
+       "sha256": "fd0b18f0204616966a720a4c4204c2da77dd5c50ef8bc37f9f53d85fa23a77db"
+      },
+      {
+       "type": "image_url",
+       "size": [
+        478,
+        678
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

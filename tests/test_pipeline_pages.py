@@ -13,7 +13,8 @@ from invoice_recognition.recognition.evidence import Evidence
 from invoice_recognition.recognition.prompts import EXTRACT_HEADER
 from invoice_recognition.shapes import Checkpoint, Line
 
-from fakes import Server, codes, header_for, line, make_pdf, never, recording, run, scan, sse
+from drawn import scan
+from fakes import Server, codes, header_for, line, make_pdf, never, recording, run, sse
 
 # --------------------------------------------------------------------------- #
 # Which attempt wins

@@ -56,3 +56,95 @@ test("an answer that arrives after its screen was left is not handed on", async 
   await assert.rejects(late, (e) => e === model.LEFT);
   await assert.rejects(life.guard(Promise.reject(new Error("refused"))), (e) => e === model.LEFT);
 });
+
+// ------------------------------------------------------------------ the review screen
+
+// Shaped like the small sample: a line with three items, a page card, three issues that
+// follow from the line.
+const issue = (id, line_index, page, follows_from = [], suggestions = []) => ({
+  id, code: "x", message: `issue ${id}`, line_index, page, fields: [], suggestions, follows_from,
+});
+const ITEMS = [
+  { set: { "line.quantity": 9 }, source: "arithmetic" },
+  { set: { "line.unit_price": 19.13 }, source: "arithmetic" },
+  { set: { "line.amount": 688.68 }, source: "arithmetic", agrees_with: "header.subtotal" },
+];
+const RESULT = {
+  lines: Array.from({ length: 60 }, (_, index) => ({ index, page: index < 30 ? 1 : 2 })),
+  issues: [issue(0, 58, 2, [], ITEMS), issue(1, null, 2), issue(2, null, null, [0]), issue(3, null, null, [0]), issue(4, 52, 3, [0])],
+};
+const decided = (id, state, suggestion = null) => ({
+  id, state, suggestion, set: suggestion == null ? null : ITEMS[suggestion].set, decided_at: null, settled_by: state === "settled" ? [0] : [],
+});
+const review = (...states) => ({
+  open_count: states.filter((s) => s.state === "open").length,
+  issues: RESULT.issues.map((i) => states.find((s) => s.id === i.id) ?? decided(i.id, "open")),
+});
+const ids = (issues) => issues.map((i) => i.id);
+
+test("before any decision, what follows from a line sits under it", () => {
+  for (const r of [null, review()]) {
+    const placed = model.placeIssues(RESULT, r);
+    assert.deepEqual([...placed.rows.keys()], [58]);
+    assert.deepEqual(ids(placed.cards), [1]);
+    assert.deepEqual(ids(placed.children.get(0)), [2, 3, 4]);
+  }
+});
+
+test("accepting the amount keeps them under it, settled by the server", () => {
+  const r = review(decided(0, "accepted", 2), decided(2, "settled"), decided(3, "settled"), decided(4, "settled"));
+  const placed = model.placeIssues(RESULT, r);
+  assert.deepEqual(ids(placed.children.get(0)), [2, 3, 4]);
+  assert.deepEqual(ids(placed.cards), [1]);
+});
+
+test("accepting the quantity, or keeping the line, sends them out as their own issues", () => {
+  for (const parent of [decided(0, "accepted", 0), decided(0, "kept")]) {
+    const placed = model.placeIssues(RESULT, review(parent));
+    assert.equal(placed.children.size, 0);
+    assert.deepEqual(ids(placed.cards), [1, 2, 3]);
+    assert.deepEqual(ids(placed.rows.get(52)), [4]);
+  }
+});
+
+test("an issue decided on its own stays its own, whatever its parent", () => {
+  const placed = model.placeIssues(RESULT, review(decided(0, "accepted", 2), decided(2, "kept")));
+  assert.deepEqual(ids(placed.children.get(0)), [3, 4]);
+  assert.deepEqual(ids(placed.cards), [1, 2]);
+});
+
+test("a second reading's item does not count as the amount's arithmetic", () => {
+  const result = structuredClone(RESULT);
+  result.issues[0].suggestions = [{ set: { "line.amount": 688.68 }, source: "second_reading" }];
+  const r = review({ ...decided(0, "accepted"), suggestion: 0, set: { "line.amount": 688.68 } });
+  assert.equal(model.placeIssues(result, r).children.size, 0);
+});
+
+test("the summary counts what is open", () => {
+  assert.equal(model.summaryTitle(RESULT, null), "5 issues open");
+  assert.equal(model.summaryTitle(RESULT, { open_count: 1 }), "1 issue open");
+  assert.equal(model.summaryTitle(RESULT, { open_count: 0 }), "All 5 issues checked");
+  assert.equal(model.summaryTitle({ issues: [] }, null), "Everything adds up");
+});
+
+test("the first open line is selected first", () => {
+  assert.equal(model.firstOpenLine(RESULT, null, model.placeIssues(RESULT, null)), 58);
+  const r = review(decided(0, "kept"));
+  assert.equal(model.firstOpenLine(RESULT, r, model.placeIssues(RESULT, r)), 52);
+  const none = { lines: [], issues: [] };
+  assert.equal(model.firstOpenLine(none, null, model.placeIssues(none, null)), null);
+});
+
+test("the end of a reading is read out", () => {
+  assert.equal(model.finishedText({ status: "needs_review", result: RESULT }), "Reading finished: 5 issues.");
+  assert.equal(model.finishedText({ status: "ok", result: { issues: [] } }), "Reading finished: everything adds up.");
+  assert.equal(model.finishedText({ status: "failed", error: { message: "Too blurred." } }), "Reading failed: Too blurred.");
+});
+
+test("the rows that passed: one, several, every one, none", () => {
+  assert.equal(model.passedNote(110, 109, false), "The other 109 rows passed every check and are hidden.");
+  assert.equal(model.passedNote(2, 1, false), "The other row passed every check and is hidden.");
+  assert.equal(model.passedNote(5, 5, false), "Every row passed every check and is hidden.");
+  assert.equal(model.passedNote(110, 109, true), "The other 109 rows passed every check.");
+  assert.equal(model.passedNote(3, 0, false), "");
+});

@@ -76,5 +76,28 @@
       </section>
     </section>
   </template>
+
+  <template id="tpl-review">
+    <section class="review">
+      <div class="review-head">
+        <a class="back" href="#/"><span aria-hidden="true">←</span> Documents</a>
+        <div class="review-title">
+          <h1 id="r-filename"></h1>
+          <span id="r-status"></span>
+        </div>
+        <p class="review-meta muted" id="r-meta"></p>
+      </div>
+      <dl class="fields" id="r-fields" hidden></dl>
+
+      <div class="workarea">
+        <div class="docpane" id="docpane" tabindex="0" role="region" aria-label="Document pages">
+          <div class="pages" id="pages"></div>
+        </div>
+        <div class="datapane" id="datapane">
+          <div id="r-body"></div>
+        </div>
+      </div>
+    </section>
+  </template>
 </body>
 </html>

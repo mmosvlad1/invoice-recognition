@@ -76,3 +76,88 @@ export function fallbackDetail(status) {
   if (status === 413) return TOO_LARGE;
   return `The server answered with an error (${status}). Try again.`;
 }
+
+// ------------------------------------------------------------------ the review screen
+
+/** The review's state of an issue: open | accepted | kept | settled ("open" without one). */
+export const stateOf = (review, id) => review?.issues?.[id]?.state ?? "open";
+
+/** How many issues are still open: the review's count, or every issue before a review. */
+export const openCount = (result, review) => review?.open_count ?? result.issues.length;
+
+/**
+ * Whether issue `issue` is shown under the issues it follows from: while the server says
+ * it is settled, or while it is open and could still be settled — every parent is open or
+ * accepted with an arithmetic item that sets the line's amount. Reads the parents' state
+ * only; the server alone decides that an issue is settled.
+ */
+export function nestsUnderParents(issue, result, review) {
+  const parents = issue.follows_from ?? [];
+  if (!parents.length || !parents.every((p) => result.issues[p] && !result.issues[p].follows_from?.length)) {
+    return false;
+  }
+  const own = stateOf(review, issue.id);
+  if (own === "settled") return true;
+  if (own !== "open") return false;
+  return parents.every((p) => {
+    const state = stateOf(review, p);
+    if (state === "open") return true;
+    const decided = review.issues[p];
+    const item = result.issues[p].suggestions?.[decided.suggestion];
+    return state === "accepted" && item?.source === "arithmetic" && Object.hasOwn(decided.set ?? {}, "line.amount");
+  });
+}
+
+const push = (map, key, value) => (map.get(key) ?? map.set(key, []).get(key)).push(value);
+
+/**
+ * Where each issue is shown: under its line's row (`rows`: line index -> issues), as a
+ * card for its page or the document (`cards`), or under the issues it follows from
+ * (`children`: parent id -> issues).
+ */
+export function placeIssues(result, review) {
+  const rows = new Map();
+  const cards = [];
+  const children = new Map();
+  for (const issue of result.issues) {
+    if (nestsUnderParents(issue, result, review)) {
+      for (const parent of issue.follows_from) push(children, parent, issue);
+    } else if (issue.line_index != null && result.lines[issue.line_index]) {
+      push(rows, issue.line_index, issue);
+    } else {
+      cards.push(issue);
+    }
+  }
+  return { rows, cards, children };
+}
+
+/** The title of the summary above the rows. */
+export function summaryTitle(result, review) {
+  const total = result.issues.length;
+  if (!total) return "Everything adds up";
+  const open = openCount(result, review);
+  return open ? `${plural(open, "issue")} open` : `All ${plural(total, "issue")} checked`;
+}
+
+/** What the summary says of the rows without an issue; "" when every row has one. */
+export function passedNote(total, hidden, showAll) {
+  const tail = (verb) => (showAll ? "." : ` and ${verb} hidden.`);
+  if (hidden === 0) return "";
+  if (hidden === total) return `Every row passed every check${tail("is")}`;
+  if (hidden === 1) return `The other row passed every check${tail("is")}`;
+  return `The other ${plural(hidden, "row")} passed every check${tail("are")}`;
+}
+
+/** The row selected when a result opens: the first open issue's line, or null. */
+export function firstOpenLine(result, review, placed) {
+  const lines = [...placed.rows.keys()].sort((a, b) => a - b);
+  const open = lines.find((index) => placed.rows.get(index).some((i) => stateOf(review, i.id) === "open"));
+  return open ?? lines[0] ?? null;
+}
+
+/** What the live region says when a reading ends. */
+export function finishedText(job) {
+  if (job.status === "failed") return `Reading failed: ${job.error?.message ?? "the document could not be read."}`;
+  const n = job.result?.issues.length ?? 0;
+  return `Reading finished: ${n ? plural(n, "issue") : "everything adds up"}.`;
+}

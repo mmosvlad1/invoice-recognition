@@ -39,6 +39,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import Executor
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
 from decimal import Decimal
@@ -785,14 +786,25 @@ async def process(
     client: httpx.AsyncClient,
     cfg: Config | None = None,
     on_page: Callable[[PageResult], None] | None = None,
+    *,
+    lane: Executor | None = None,
 ) -> Result:
     """Read one invoice file. Never raises for a bad file or a bad answer: those end
     up in Result.issues and Result.status.
 
-    on_page is called once per page, in its final form, as soon as it is settled."""
+    on_page is called once per page, in its final form, as soon as it is settled.
+
+    lane runs the local work on the file (prepare: pypdf, pdfium, Pillow, OpenCV), so the
+    event loop stays free while a document is opened and measured. It must have one
+    thread and be the only one that calls those libraries: pdfium must never be called
+    from two threads at once. None: the work runs on the calling thread, never on the
+    loop's default executor (a pool of several threads)."""
     cfg = cfg or Config()
     started = time.monotonic()
-    prep = prepare(data, mime, cfg)
+    if lane is None:
+        prep = prepare(data, mime, cfg)
+    else:
+        prep = await asyncio.get_running_loop().run_in_executor(lane, prepare, data, mime, cfg)
     if prep.failure is not None:
         # Nothing was sent to a model: a result the caller can show, not a crash.
         issues, notes = prep.failure

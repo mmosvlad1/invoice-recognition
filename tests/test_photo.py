@@ -99,3 +99,35 @@ def test_damaged_image_gives_failed_result_not_exception() -> None:
     assert codes(res.issues) == ["unreadable_file"]
     assert res.calls == 0 and res.lines == [] and res.pages == []
     json.dumps(res.to_json())
+
+
+@pytest.mark.parametrize(
+    ("size", "sent"),
+    [
+        ((4000, 3000), (2400, 1800)),  # a 12-megapixel phone photo
+        ((3000, 8000), (900, 2400)),  # 24 megapixels, portrait
+        ((2500, 1000), (2400, 960)),
+        ((2400, 1600), (2400, 1600)),  # at the cap: unchanged
+        ((1600, 2134), (1600, 2134)),  # the largest photo measured: unchanged
+    ],
+)
+def test_photo_sent_to_the_model_is_at_most_2400_px_long(
+    size: tuple[int, int], sent: tuple[int, int]
+) -> None:
+    # A plain sheet with no desk around it: nothing to flatten, only the size changes.
+    big = Image.new("RGB", size, "white")
+    assert sent_image(photo.part(big)).size == sent
+
+
+def test_photo_is_measured_before_it_is_made_smaller(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = []
+
+    def no_rectify(im: Image.Image) -> Image.Image:
+        seen.append(im.size)
+        return im
+
+    monkeypatch.setattr(photo, "rectify", no_rectify)
+    data = jpeg(Image.new("RGB", (4800, 3600), "white"))
+    assert photo.load(data).size == (4800, 3600)  # what the quality check measures
+    assert sent_image(photo.part(photo.load(data))).size == (2400, 1800)
+    assert seen == [(4800, 3600)]  # the sheet is found on the photo as taken

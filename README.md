@@ -8,9 +8,32 @@ presence on the page) instead of being trusted as the model returned it.
 Clients poll for the status and fetch the result once processing finishes.
 
 The models are called through [OpenRouter](https://openrouter.ai/); by default
-every request goes to `google/gemini-3.1-flash-lite`. **Every uploaded document
-is sent to a third party**: OpenRouter, and through it the provider of the
-model.
+every request goes to `google/gemini-3.1-flash-lite`. **Every uploaded
+document is sent to a third party**: OpenRouter, and through it the provider
+of the model (with the second reading below switched on, a scan goes to two:
+Google's and OpenAI's models).
+
+### A second reading of scans (off by default)
+
+On a scan nothing in the document can confirm an item code: there is no text
+layer to hold it against, and no arithmetic involves it. With
+`SECOND_READING_MODEL=openai/gpt-6-luna`, every page of a scan that is sent to
+the model (not one flagged as blurred or dark) is read a second time by that
+model of another provider. Where the two readings of a line item differ, the
+line gets an issue `second_reading` (a warning) that names the cells and
+offers the other model's values as a suggestion; the result keeps the first
+reading. A second reading that fails or does not answer in time only leaves a
+note and never fails a document; second readings yield the shared request
+slots to first readings and never hold more than half of them.
+
+It is off because of what it was measured to do. In a control run on 7
+scanned documents (15 pages, 174 compared rows; three synthetic scans and four
+real invoices rendered as scans) it flagged the one error the first reader
+made and raised 2 false alarms (1.15 %), just above the 1 % set as the limit
+before the run. Earlier, on two synthetic scans, it showed 5 of 5 errors with
+1 false alarm on 463 rows. It adds about 40 % to the cost of reading a scan and
+a few seconds. With so few rows these rates are indicative only. Two models
+that misread a code the same way are not caught.
 
 Cost and time per document, each measured once on synthetic invoices: the
 first four through this API, the last in the research prototype that preceded
@@ -23,6 +46,9 @@ this repository (the same flow):
 | digital PDF, 34 pages, 1,250 line items | $0.007 | 8 s |
 | scan, 1 page, 14 line items | $0.003 | 5 s |
 | scan, 10 pages, 330 line items | ≈ $0.07 | ≈ 35 s |
+
+With the second reading switched on, a scan costs about 40 % more (see
+above).
 
 ## Run
 
@@ -67,7 +93,8 @@ Things to know before running it:
   the code sees every uploaded document and can download it. Make one with
   `python -c "import secrets; print(secrets.token_urlsafe(24))"`; a code shorter
   than 16 characters stops the start.
-- **Files are sent to a model provider** (OpenRouter and the model behind it).
+- **Files are sent to a model provider** (OpenRouter and the model behind it;
+  with the second reading on, a scan goes to two models of two providers).
 - **A proxy in the environment is used.** The model requests honour
   `HTTPS_PROXY` (and, on macOS, the system proxy settings). A forgotten proxy
   looks like a provider that never answers.
@@ -219,8 +246,9 @@ Each limit is a setting with this default (see `.env.example`):
 | `DEADLINE_S` | 240 | seconds one document may take once its reading starts; what was read by then is kept |
 | `JOBS_KEPT` | 50 | documents kept in memory; older finished ones are dropped |
 
-`PAGE_MODEL`, `HEADER_MODEL` and `LAYOUT_MODEL` name the models (OpenRouter
-names).
+`PAGE_MODEL`, `HEADER_MODEL`, `LAYOUT_MODEL` and `SECOND_READING_MODEL` name
+the models (OpenRouter names); `SECOND_READING_MODEL` is empty by default, and
+scans are then read once.
 
 ## Access code
 
@@ -245,8 +273,7 @@ The code keeps strangers out; it does not tell users apart.
 
 - the web page for uploading and reviewing invoices (the API is all there is);
 - a container image and the deployment;
-- a second reading of scans by another model, and a fallback model when a
-  request fails;
+- a fallback model when a request fails;
 - where each value is printed on a scan or a photo (no OCR: only the page).
 
 ## Development

@@ -4,6 +4,10 @@ Written for the accountant who uploads an invoice: full sentences, no internal n
 Machine-readable codes stay where they are used; only the words live here.
 """
 
+from collections.abc import Callable
+
+from invoice_recognition.recognition.checks import Issue
+
 # --------------------------------------------------------------------------- #
 # HTTP errors: Problem.detail (the code says the same for a program)
 # --------------------------------------------------------------------------- #
@@ -47,3 +51,25 @@ IMAGE_TOO_LARGE = (
     "The image has more pixels than can be read; the limit is {limit}. "
     "Save the image at a lower resolution."
 )
+
+# --------------------------------------------------------------------------- #
+# The result (views.py)
+# --------------------------------------------------------------------------- #
+
+# Notes the API adds to the result, by kind. The flow's own notes keep their text.
+NOTE_TEXTS = {
+    # read: as printed, with three decimals ("8.200"); corrected: 8200
+    "quantity_repaired": (
+        "The quantity was read as {read} and corrected to {corrected}: the point in it is a "
+        "thousands separator, as the amount of the line shows."
+    ),
+}
+
+# The message of an issue, by its code, for a person. A code not listed keeps the
+# message the flow wrote.
+ISSUE_TEXTS: dict[str, Callable[[Issue], str]] = {}
+
+
+def issue_text(issue: Issue) -> str:
+    word = ISSUE_TEXTS.get(issue.check)
+    return word(issue) if word is not None else issue.message

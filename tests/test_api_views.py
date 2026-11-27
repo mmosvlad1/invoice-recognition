@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from invoice_recognition.api import messages
 from invoice_recognition.api.views import MAX_DEPTH, LineView, ResultView, result_view
 from invoice_recognition.recognition.checks import Issue
+from invoice_recognition.recognition.config import FAST, OTHER, Config
 from invoice_recognition.recognition.pipeline import stronger_model_note
 from invoice_recognition.recognition.results import Attempt, PageResult, Result
 from invoice_recognition.shapes import Header, JSONObject, Line
@@ -533,3 +534,40 @@ def test_a_file_refused_before_any_request() -> None:
     out = dumped(result_view(res))
     assert out["details"]["layout"] is None and out["details"]["attempts"] == []
     assert [i["code"] for i in out["issues"]] == ["unreadable_file"]
+
+
+def test_a_scan_read_twice_by_the_flow() -> None:
+    """A real result: two pages, each read a second time by another model, which reads a
+    SKU of page 2 differently."""
+    first: dict[int, list[Answer]] = {1: [[line(1)]], 2: [[line(2)]]}
+    second: dict[int, list[Answer]] = {1: [[line(1)]], 2: [[line(2) | {"sku": "SKU-0O2"}]]}
+    server = Server(header_for([line(1), line(2)]), first, models={OTHER: Server({}, second)})
+    res = run(drawn.scan(2), "application/pdf", server, Config(second_reading_model=OTHER))
+    out = dumped(result_view(res))
+
+    details = out["details"]
+    assert [(a["what"], a["page"], a["model"]) for a in details["attempts"]] == [
+        ("header", None, FAST),
+        ("page", 1, FAST),
+        ("second_reading", 1, OTHER),
+        ("page", 2, FAST),
+        ("second_reading", 2, OTHER),
+    ]
+    assert [a["issue_count"] for a in details["attempts"] if a["what"] == "second_reading"] == [
+        0,
+        1,
+    ]
+    # The view's totals are those of the attempts it lists, and the flow's agree with them.
+    assert details["calls"] == res.calls == 5
+    assert details["cost_usd"] == pytest.approx(res.cost_usd) and res.cost_usd == pytest.approx(
+        0.005
+    )
+    assert (details["prompt_tokens"], details["completion_tokens"]) == (500, 250)
+    (issue,) = out["issues"]
+    assert (issue["code"], issue["severity"], issue["line_index"], issue["fields"]) == (
+        "second_reading",
+        "warning",
+        1,
+        ["line.sku"],
+    )
+    assert issue["suggestions"] == [{"set": {"line.sku": "SKU-0O2"}, "source": "second_reading"}]

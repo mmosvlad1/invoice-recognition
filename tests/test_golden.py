@@ -16,6 +16,8 @@ commit.
 
 Left out of the comparison, on purpose:
 - the clock (duration_s of the document and of every attempt);
+- the keys of an issue added after the port (fields, suggestions, follows_from): the
+  prototype did not have them; unit tests and a flow test pin them;
 - text for the user that was translated when the flow was ported (the message of a
   quality reason, the reason of a carried tail without an owner, the text of a
   page_without_text note): it is not in the golden files; codes, pages and kinds are;
@@ -87,10 +89,21 @@ def compare(actual: Any, expected: Any, path: str = "", loose: bool = False) -> 
     return []
 
 
+# Keys of an issue that the prototype did not have.
+_NEW_ISSUE_KEYS = ("fields", "suggestions", "follows_from")
+
+
 def comparable(result: dict[str, Any]) -> dict[str, Any]:
-    """The result without the text for the user that was translated in the port, and with
-    the value of every quality reason marked as measured."""
+    """The result without the text for the user that was translated in the port, without
+    the keys of an issue added after it, and with the value of every quality reason marked
+    as measured."""
     out: dict[str, Any] = json.loads(json.dumps(result))
+    issues = list(out.get("issues", []))
+    for page in out.get("pages", []):
+        issues += page.get("issues", [])
+    for issue in issues:
+        for key in _NEW_ISSUE_KEYS:
+            issue.pop(key, None)
     quality = out.get("quality") or {}
     reasons = list(quality.get("reasons", []))
     for page in quality.get("pages", []):

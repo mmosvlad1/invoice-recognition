@@ -72,6 +72,8 @@ def dumped(view: ResultView) -> JSONObject:
     return out
 
 
+NO_FRAME: JSONObject = {"width": None, "height": None, "text_layer": False}
+
 TWO_PAGES = [
     PageResult(1, on(1, 1, 2), attempts=[attempt(2)]),
     PageResult(2, on(2, 3, 4, 5), attempts=[attempt(3)]),
@@ -88,7 +90,7 @@ def test_lines_get_their_index_in_the_document_and_issues_point_at_it() -> None:
         (3, 4, 2),
         (4, 5, 2),
     ]
-    assert out["lines"][3] == {"index": 3} | line(4) | {"page": 2}
+    assert out["lines"][3] == {"index": 3} | line(4) | {"page": 2, "boxes": None}
     [view] = out["issues"]
     assert view == {
         "id": 0,
@@ -242,7 +244,7 @@ def test_values_as_read_are_never_coerced() -> None:
     }
     header: Header = {"total": "1.440,00", "currency": 978, "tax_breakdown": "none", "x": [1]}
     out = dumped(result_view(result([PageResult(1, [odd])], header=header)))
-    assert out["lines"][0] == {"index": 0} | odd
+    assert out["lines"][0] == {"index": 0} | odd | {"boxes": None}
     for key, value in header.items():
         assert out["header"][key] == value
     assert out["header"]["supplier_name"] is None
@@ -291,8 +293,8 @@ def test_pages_checkpoints_and_details() -> None:
     out = dumped(result_view(res))
     assert out["checkpoints"] == res.checkpoints
     assert out["pages"] == [
-        {"page": 1, "method": "model", "line_count": 2, "repaired_count": 0},
-        {"page": 2, "method": "skipped", "line_count": 0, "repaired_count": 0},
+        {"page": 1, "method": "model", "line_count": 2, "repaired_count": 0} | NO_FRAME,
+        {"page": 2, "method": "skipped", "line_count": 0, "repaired_count": 0} | NO_FRAME,
     ]
     details = out["details"]
     assert {k: v for k, v in details.items() if k != "attempts"} == {
@@ -473,6 +475,7 @@ def test_every_field_sent_is_required_in_the_serialisation_schema() -> None:
         "unit_price",
         "tax_rate",
         "amount",
+        "boxes",
     }
     assert set(defs["IssueView"]["required"]) == {
         "id",

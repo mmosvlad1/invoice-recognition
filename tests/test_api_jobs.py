@@ -274,7 +274,7 @@ def test_every_field_sent_is_required_in_the_serialisation_schema() -> None:
         "settled_by",
     }
     assert {"index", "line_no", "sku", "quantity", "amount"} <= set(defs["LineView"]["required"])
-    assert len(defs["LineView"]["required"]) == 10
+    assert len(defs["LineView"]["required"]) == 11  # with boxes
     assert {"fields", "suggestions", "follows_from", "line_index"} <= set(
         defs["IssueView"]["required"]
     )

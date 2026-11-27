@@ -2,8 +2,11 @@
 
 import io
 import json
+from decimal import Decimal
 
 from reportlab.pdfgen import canvas
+
+from invoice_recognition.shapes import Header, Line
 
 
 def sse(text: str, cost: float | None = 0.001) -> str:
@@ -36,3 +39,31 @@ def make_pdf(pages: list[list[str]], *, size: tuple[float, float] = (595, 842)) 
         pdf.showPage()
     pdf.save()
     return buf.getvalue()
+
+
+def line(no: int, qty: int = 2, price: float = 10.0, amount: float | None = None) -> Line:
+    """A line item as the model returns it; amount defaults to qty x price."""
+    return {
+        "line_no": no,
+        "sku": f"SKU-{no:03d}",
+        "description": f"Item {no}",
+        "quantity": qty,
+        "unit": "pcs",
+        "unit_price": price,
+        "tax_rate": 20,
+        "amount": qty * price if amount is None else amount,
+    }
+
+
+def header_for(lines: list[Line]) -> Header:
+    """A header whose totals agree with `lines` at 20 % tax."""
+    subtotal = sum(Decimal(str(item["amount"])) for item in lines)
+    tax = (subtotal * Decimal("0.2")).quantize(Decimal("0.01"))
+    return {
+        "supplier_name": "ACME Ltd",
+        "invoice_number": "INV-1",
+        "currency": "EUR",
+        "subtotal": float(subtotal),
+        "tax_total": float(tax),
+        "total": float(subtotal + tax),
+    }

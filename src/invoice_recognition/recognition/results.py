@@ -31,7 +31,8 @@ class PageResult:
     attempts: list[Attempt] = field(default_factory=list)
     repaired: int = 0
     # "model": read by the model; "layout": rows found by code (attempts, if any, are the
-    # witness or a re-read by the model that was not kept).
+    # witness or a re-read by the model that was not kept); "skipped": a page of a scan that
+    # was not sent to the model - blank, or too blurred to read (Result.quality says which).
     method: str = "model"
     # Text at the top of the page that belongs to the last line item of the previous page;
     # "" when not asked for.
@@ -68,20 +69,38 @@ class Result:
     #                            nothing was appended: the same keys
     #     carry_without_owner  - no row to append it to; nothing was changed: + "reason"
     #     carry_join_failed    - the join broke ("page" is None); nothing was changed
+    #   a page of a scan that has no text and was not sent to the model
+    #   (source: "scan_quality"): page_without_text
     notes: list[JSONObject] = field(default_factory=list)
-    # {} when nothing was measured: a PDF, or the check switched off (Config.photo_quality).
+    # {} when nothing was measured: a PDF with a text layer, a PDF none of whose pages
+    # carries an image, or the check switched off (Config.photo_quality / scan_quality).
     # Photo:
     #   verdict  - ok | warn | reject | unchecked (the measurement itself broke; "error" says how)
     #   reasons  - [{code, message (for the user), severity: reject | warn, value?, side?}]
     #   measures - the numbers (quality.Quality.to_json); limits - the limits they were held
     #              against
     # Every reason is also in `issues` as photo_<code>.
+    # Scan:
+    #   verdict  - reject (no page was sent: the document is "failed") | warn (a page was
+    #              flagged or not read for blur) | ok | unchecked (nothing could be measured;
+    #              "error" says how when it broke)
+    #   pages    - one entry per page: {page, verdict, reasons, measures?, error?, note?};
+    #              the verdict of a page is ok | warn | reject (not sent) | empty (no text:
+    #              not sent) | unchecked (read as before: the measurement broke - "error";
+    #              the page has no image, or something visible is drawn besides its image -
+    #              "note"; no lines of text on a page that is not blank - reason
+    #              "no_text_lines")
+    #   reasons  - the reasons of all pages, each with "page"; severity: reject | warn |
+    #              skip (empty page) | info
+    #   limits   - quality.ScanLimits they were held against
+    # Every reject and warn reason is also in `issues` as scan_<code> with the page number.
     quality: JSONObject = field(default_factory=dict)
 
     @property
     def method(self) -> str:
-        """How the document was read: "layout" (all pages by code), "model", or "mixed"."""
-        kinds = {p.method for p in self.pages}
+        """How the document was read: "layout" (all pages by code), "model", or "mixed".
+        Pages of a scan that were not sent to the model do not count."""
+        kinds = {p.method for p in self.pages if p.method != "skipped"}
         return "mixed" if len(kinds) > 1 else next(iter(kinds), "model")
 
     def to_json(self) -> JSONObject:

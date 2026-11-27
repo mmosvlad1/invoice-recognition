@@ -135,6 +135,8 @@ def _owner(prev: JSONObject | None, page: int) -> tuple[int | None, str]:
         return None, "This is the first page of the document."
     if prev is None:
         return None, f"Page {page - 1} was not read."
+    if prev.get("skipped"):
+        return None, f"Page {page - 1} was not sent to the model."
     if prev.get("unread"):
         return None, f"Page {page - 1} could not be read in full."
     rows = prev.get("rows") or []
@@ -157,10 +159,11 @@ def join_carry(pages: list[JSONObject]) -> tuple[list[JSONObject], list[JSONObje
     it is a control total (or page N is missing, empty, or N+1 is the first page),
     nothing is changed. Either way a note says what happened.
 
-    Two optional keys of a page serve the flow (pipeline), where a page is not always an
+    Optional keys of a page serve the flow (pipeline), where a page is not always an
     answer of the model. "unread": True - the page was not read to its end (a failed
     request, a cut-off answer): its last row is not known to be the last row printed, so
-    it owns nothing. "joined_by_code": True - the rows were read by code from the text
+    it owns nothing. "skipped": True - the page was not sent to the model at all (a blank
+    or unreadable page of a scan): it owns nothing either. "joined_by_code": True - the rows were read by code from the text
     layer (layout.py), which appends text carried over to the next page by itself: when
     the description of the owner already contains the text, nothing is appended and the
     note is "carry_already_joined".

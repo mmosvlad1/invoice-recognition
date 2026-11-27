@@ -1,12 +1,25 @@
-"""Shared test helpers: fake model answers and generated documents. No network."""
+"""Shared test helpers: fake model answers, a fake model server and generated documents.
 
+No network."""
+
+import asyncio
 import io
 import json
+import re
+from collections import Counter
+from collections.abc import Callable
 from decimal import Decimal
+from typing import Any
 
+import httpx
+from pypdf import PdfWriter
 from reportlab.pdfgen import canvas
 
-from invoice_recognition.shapes import Header, Line
+from invoice_recognition.recognition import pipeline
+from invoice_recognition.recognition.checks import Issue
+from invoice_recognition.recognition.config import Config
+from invoice_recognition.recognition.results import Result
+from invoice_recognition.shapes import Header, JSONObject, Line
 
 
 def sse(text: str, cost: float | None = 0.001) -> str:
@@ -67,3 +80,99 @@ def header_for(lines: list[Line]) -> Header:
         "tax_total": float(tax),
         "total": float(subtotal + tax),
     }
+
+
+# --------------------------------------------------------------------------- #
+# A fake OpenRouter for the flow
+# --------------------------------------------------------------------------- #
+
+type Answer = list[Any] | dict[str, Any] | str | httpx.Response | BaseException
+"""What the fake server answers: a list of rows (sent as {"rows": [...]}), any other
+JSON object, a raw SSE body, a ready response, or an exception to raise."""
+
+
+class Server:
+    """A fake OpenRouter that tells the requests of the flow apart by their prompt.
+
+    header: answer to the header request. pages: {page: [answer of attempt 1, attempt 2,
+    ...]}, the last one repeats. layout: answer to the layout request (text-layer PDFs).
+    calls counts the requests: "header", "layout", and the page number of each page.
+    """
+
+    def __init__(
+        self, header: Answer, pages: dict[int, list[Answer]], layout: Answer | None = None
+    ) -> None:
+        self.header, self.pages, self.layout = header, pages, layout
+        self.calls: Counter[int | str] = Counter()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt = body["messages"][0]["content"][0]["text"]
+        answer: Answer | None
+        if prompt.startswith("You read ONE page"):
+            m = _PAGE_OF.search(prompt)
+            assert m is not None
+            page = int(m.group(1))
+            answers = self.pages[page]
+            answer = answers[min(self.calls[page], len(answers) - 1)]
+            self.calls[page] += 1
+        elif prompt.startswith("You are given the text layer"):
+            # The layout request carries no file.
+            assert [c["type"] for c in body["messages"][0]["content"]] == ["text"]
+            answer = self.layout
+            self.calls["layout"] += 1
+        else:
+            answer = self.header
+            self.calls["header"] += 1
+        if isinstance(answer, BaseException):
+            raise answer
+        if isinstance(answer, httpx.Response):
+            return answer
+        if isinstance(answer, str):
+            return httpx.Response(200, text=answer)
+        payload = {"rows": answer} if isinstance(answer, list) else answer
+        return httpx.Response(200, text=sse(json.dumps(payload)))
+
+
+_PAGE_OF = re.compile(r"page (\d+) of \d+")
+
+type Handler = Callable[[httpx.Request], httpx.Response]
+
+
+def run(data: bytes, mime: str, server: Handler, cfg: Config | None = None) -> Result:
+    """process() on one file, with every request answered by `server`."""
+
+    async def go() -> Result:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as client:
+            return await pipeline.process(data, mime, client, cfg)
+
+    return asyncio.run(go())
+
+
+def recording(server: Handler) -> tuple[Handler, list[JSONObject]]:
+    """The server, and the parsed bodies of the requests it got, in order."""
+    bodies: list[JSONObject] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return server(request)
+
+    return handler, bodies
+
+
+def never(request: httpx.Request) -> httpx.Response:
+    raise AssertionError("no request may be sent")
+
+
+def scan(pages: int) -> bytes:
+    """A PDF without a text layer: for the flow it is a scan (no evidence)."""
+    w = PdfWriter()
+    for _ in range(pages):
+        w.add_blank_page(595, 842)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def codes(issues: list[Issue]) -> list[str]:
+    return [i.check for i in issues]

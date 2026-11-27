@@ -125,7 +125,7 @@ async def complete(
                     break
                 try:
                     event = json.loads(payload)
-                except json.JSONDecodeError:
+                except _REFUSED:
                     event = None
                 if not isinstance(event, dict):  # one broken chunk must not lose the rest
                     malformed += 1
@@ -159,14 +159,22 @@ async def complete(
     return res
 
 
+# What json.loads raises for text it refuses: broken JSON (JSONDecodeError, a ValueError),
+# an integer longer than Python converts (ValueError: more than 4,300 digits) and nesting
+# deeper than the parser's recursion allows (RecursionError). Each is a broken answer.
+_REFUSED = (ValueError, RecursionError)
+
+
 def parse_json(text: str) -> JSONObject | None:
-    """Parse model output as a JSON object; tolerate a ```json fence. None if broken."""
+    """Parse model output as a JSON object; tolerate a ```json fence. None if broken,
+    including JSON the parser refuses: an integer of thousands of digits, or nesting
+    deeper than it can follow."""
     s = text.strip()
     if s.startswith("```"):
         s = s.split("\n", 1)[-1].rsplit("```", 1)[0]
     try:
         out = json.loads(s)
-    except json.JSONDecodeError:
+    except _REFUSED:
         return None
     return out if isinstance(out, dict) else None
 
@@ -184,6 +192,6 @@ def salvage_lines(text: str) -> list[Line]:
     for m in _LINE_OBJ.finditer(text):
         try:
             lines.append(json.loads(m.group(0)))
-        except json.JSONDecodeError:
+        except _REFUSED:
             pass
     return lines

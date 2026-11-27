@@ -40,7 +40,11 @@ def parse_number(token: str, locale: str) -> Decimal | None:
 
 def printed_forms(x: Decimal) -> set[str]:
     """Every way a value may be printed, in either locale, so a check does not
-    depend on guessing the number format: 2739.07 -> 2,739.07 / 2.739,07 / ..."""
+    depend on guessing the number format: 2739.07 -> 2,739.07 / 2.739,07 / ...
+
+    `x` must be finite: NaN and infinity have no printed form."""
+    if not x.is_finite():
+        raise ValueError(f"not a finite number: {x}")
     sign = "-" if x < 0 else ""
     a = abs(x)
     # The exponent is an int for every finite number ("n", "N" or "F" otherwise).

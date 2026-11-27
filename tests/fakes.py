@@ -11,7 +11,9 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
+import cv2
 import httpx
+import numpy as np
 from PIL import Image
 from pypdf import PdfWriter
 from reportlab.lib.utils import ImageReader
@@ -195,4 +197,31 @@ def scan_with_ocr_text(rows: list[Line]) -> bytes:
             f"{r['sku']} {r['description']} {r['quantity']} {r['unit_price']:.2f} {r['amount']:.2f}",
         )
     c.save()
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Drawn photos
+# --------------------------------------------------------------------------- #
+
+PHOTO_W, PHOTO_H = 600, 800
+SHEET = (60, 60, 540, 740)  # x0, y0, x1, y1 of the sheet of paper in the frame
+WORDS = ("INV-2026", "Hex bolt M8", "1.250,00", "20%", "324,00")
+
+
+def photo(desk: int = 70, paper: int = 235, rows: int = 18) -> Image.Image:
+    """A "photo" of an invoice: a light sheet with rows of words on a dark desk, in gray."""
+    img = np.full((PHOTO_H, PHOTO_W), desk, np.uint8)
+    x0, y0, x1, y1 = SHEET
+    img[y0:y1, x0:x1] = paper
+    for i in range(rows):
+        for j, word in enumerate(WORDS):
+            at = (x0 + 40 + j * 88, y0 + 60 + i * 30)
+            cv2.putText(img, word, at, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 20, 1, cv2.LINE_AA)
+    return Image.fromarray(img)
+
+
+def jpeg(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=95)
     return buf.getvalue()

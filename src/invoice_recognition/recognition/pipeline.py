@@ -40,6 +40,14 @@ note; a page too blurred to read is not sent and leaves the issue "scan_blurred"
 number, the other pages are read as usual; a doubtful page is read and flagged
 "scan_<code>". When no page is left to read, the document ends as "failed" with no
 request.
+
+A second reading of a scan (second_reading.py), when Config.second_reading_model names a
+model: every page of a scan sent without a quality warning is also read once by that
+model, next to the first reading. Where the two disagree on a line item, the item gets an
+issue "second_reading" (a warning, with the other model's values as a suggestion); the
+lines stay those of the first reading. A second reading yields every shared request slot
+to the first readers (Gate.enter) and never counts against the deadline; one that cannot
+be used leaves one note and changes nothing else.
 """
 
 import asyncio
@@ -72,6 +80,7 @@ from invoice_recognition.recognition import checks, photo
 from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition import quality as ql
+from invoice_recognition.recognition import second_reading as sr
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.pdf import extract_pages, page_count
@@ -493,7 +502,7 @@ async def read_page(
                 )
             )
         attempts.append(_attempt(res, len(lines), len(issues)))
-        cand = PageResult(page, lines, totals, issues, [], fixed, carry_in=tail)
+        cand = PageResult(page, lines, totals, issues, [], fixed, carry_in=tail, model=model)
         # A clean read beats a failed one, then fewer issues, then more lines; on a tie the
         # earlier attempt stays. Counting issues alone let an emptier answer win.
         key = (failed, len(issues), -len(lines))
@@ -597,11 +606,20 @@ def _pages(pages: list[int]) -> tuple[str, bool]:
     return f"Pages {page_ranges(pages)}", False
 
 
-def second_reading_note(unanswered: list[int], unusable: list[int]) -> JSONObject:
-    """The one note for the pages of a scan that were to be read a second time and got no
-    second reading to compare: unanswered - the request failed, timed out or was not sent
-    before the deadline; unusable - an answer came, but not one that can be compared.
-    Their status is what it would be without the second reading."""
+def second_reading_note(
+    unanswered: list[int],
+    unusable: list[int],
+    uncompared: list[int] | None = None,
+    first_unread: list[int] | None = None,
+) -> JSONObject:
+    """The one note for the pages of a scan that were to be read a second time and were
+    not compared with it. unanswered: the request failed, timed out or was not sent before
+    the deadline. unusable: an answer came, but not one that can be compared (broken, cut
+    at the token limit, or without line items while the first reading has some).
+    uncompared: a usable one came, but the page could not be compared - its first reading
+    failed (first_unread, a subset), it was itself read by the second reader's model, or
+    the comparison broke. Their status is what it would be without the second reading."""
+    uncompared, first_unread = uncompared or [], first_unread or []
     text = []
     if unanswered:
         pages, one = _pages(unanswered)
@@ -615,9 +633,21 @@ def second_reading_note(unanswered: list[int], unusable: list[int]) -> JSONObjec
             f"{pages} {'has' if one else 'have'} no usable second reading: the other model's "
             "answer was broken or had no line items."
         )
-    every = sorted({*unanswered, *unusable})
-    which = "this page" if len(every) == 1 else "these pages"
-    text.append(f"Nothing else checks the item codes (SKUs) on {which}.")
+    if uncompared:
+        pages, one = _pages(uncompared)
+        text.append(
+            f"{pages} {'was' if one else 'were'} read a second time, but the two readings "
+            "could not be compared."
+        )
+    every = sorted({*unanswered, *unusable, *uncompared})
+    # A page the first reader could not read already has its own issue that says so.
+    unchecked = [p for p in every if p not in first_unread]
+    if unchecked == every:
+        which = "this page" if len(every) == 1 else "these pages"
+        text.append(f"Nothing else checks the item codes (SKUs) on {which}.")
+    elif unchecked:
+        pages, _ = _pages(unchecked)
+        text.append(f"Nothing else checks the item codes (SKUs) on {pages[0].lower()}{pages[1:]}.")
     return {
         "page": None,
         "kind": "second_reading_missing",
@@ -625,6 +655,59 @@ def second_reading_note(unanswered: list[int], unusable: list[int]) -> JSONObjec
         "source": "second_reading",
         "pages": every,
     }
+
+
+def compare_second(
+    pages: list[PageResult],
+    second_pages: list[int],
+    seconds: list[tuple[Attempt | None, list[Line] | None]],
+    model: str | None,
+) -> tuple[list[Issue], JSONObject | None]:
+    """Compare every page read a second time with the page as the result keeps it (the
+    attempt read_page chose, with any carried text joined). Sets PageResult.second_reading
+    and, on its attempt, the number of issues it raised. Returns the issues, `line`
+    indexing Result.lines (pages: every page of the document, in order), and the note for
+    the pages not compared (None: every one was). model: the second reader's model - a
+    page whose kept attempt is by that model is not compared with itself."""
+    first: dict[int, int] = {}  # index of the first line of each page within the document
+    done = 0
+    for pr in pages:
+        first[pr.page] = done
+        done += len(pr.lines)
+    issues: list[Issue] = []
+    unanswered: list[int] = []
+    unusable: list[int] = []
+    uncompared: list[int] = []
+    first_unread: list[int] = []
+    for p, (attempt, read) in zip(second_pages, seconds, strict=True):
+        pr = pages[p - 1]
+        pr.second_reading = attempt
+        if read is None or (not read and pr.lines):  # nothing to hold the page against
+            answered = attempt is not None and attempt.error is None
+            (unusable if answered else unanswered).append(p)
+            continue
+        if any(i.check == "page_read" for i in pr.issues):  # nothing reliable to compare
+            uncompared.append(p)
+            first_unread.append(p)
+            continue
+        if pr.model is not None and pr.model == model:  # one model twice is not two readers
+            uncompared.append(p)
+            continue
+        try:
+            found = sr.compare_page(pr.lines, read, p)
+        except Exception:  # fault boundary: a bug here costs this comparison, not the document
+            logger.warning("the two readings of page %d could not be compared", p, exc_info=True)
+            uncompared.append(p)
+            continue
+        for issue in found:
+            if issue.line is not None:
+                issue.line += first[p]
+        if attempt is not None:
+            attempt.issues = len(found)
+        issues += found
+    missed = unanswered or unusable or uncompared
+    note = second_reading_note(unanswered, unusable, uncompared, first_unread) if missed else None
+    return issues, note
 
 
 def deadline_unread_text(page: int, lines: int) -> str:
@@ -1693,15 +1776,10 @@ async def _read(
                 {"page": None, "kind": "carry_join_failed", "text": failure, "source": "carry_in"}
             ]
     notes += [stronger_model_note(p) for p in pages if p.stronger_model]
-    unanswered: list[int] = []
-    unusable: list[int] = []
-    for p, (attempt, read) in zip(second_pages, seconds, strict=True):
-        pages[p - 1].second_reading = attempt
-        if read is None:
-            answered = attempt is not None and attempt.error is None
-            (unusable if answered else unanswered).append(p)
-    if unanswered or unusable:
-        notes.append(second_reading_note(unanswered, unusable))
+    # After the carried text is joined: each page as the result keeps it.
+    second_issues, missing = compare_second(pages, second_pages, seconds, second_model)
+    if missing is not None:
+        notes.append(missing)
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []
@@ -1732,6 +1810,8 @@ async def _read(
     if gate.hit:
         text = deadline_text(cfg.deadline_s, unread, header_read)
         issues.append(Issue("deadline_exceeded", text))
+    # Last: every other issue keeps its position (its id) with or without a second reading.
+    issues += second_issues
     link_issues(pages, doc, issues, document)
 
     code_read = read_by_code if any(p.method == "layout" for p in pages) else None

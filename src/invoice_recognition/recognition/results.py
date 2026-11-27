@@ -50,6 +50,9 @@ class PageResult:
     # (Config.second_reading_model); None when none was sent. Not one of `attempts`: those
     # are the attempts at the page, and the result keeps their lines.
     second_reading: Attempt | None = None
+    # The model of the attempt whose lines are kept; None for a page found by code or not
+    # read by the model. Not in Result.to_json().
+    model: str | None = None
 
 
 @dataclass

@@ -18,10 +18,12 @@ import pytest
 
 from invoice_recognition.llm import PDF_NATIVE
 from invoice_recognition.recognition import pipeline as pl
+from invoice_recognition.recognition import second_reading as sr
+from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import FAST, OTHER, Config
 from invoice_recognition.recognition.prompts import EXTRACT_PAGE
 from invoice_recognition.recognition.results import PageResult, Result
-from invoice_recognition.shapes import JSONObject
+from invoice_recognition.shapes import JSONObject, Line
 
 from drawn import scan
 from fakes import (
@@ -213,6 +215,8 @@ def test_the_first_readers_requests_do_not_change(name: str, served: bool) -> No
     assert len(to(OTHER, with_it)) == len([p for p in res_on.pages if p.method != "skipped"])
     assert to(OTHER, without) == []
     assert res_on.status == res_off.status and res_on.lines == res_off.lines
+    # The readers agree: nothing is added.
+    assert [i.to_json() for i in res_on.issues] == [i.to_json() for i in res_off.issues]
 
 
 def test_photos_and_pdfs_with_a_text_layer_are_never_read_twice() -> None:
@@ -660,3 +664,227 @@ def test_a_document_that_starts_late_finds_slots_second_readings_cannot_take(
     off, with_second = asyncio.run(go(False)), asyncio.run(go(True))
     assert len(with_second) == len(off)
     assert max(abs(a - b) for a, b in zip(with_second, off, strict=True)) < 0.1
+
+
+# What a disagreement becomes
+# --------------------------------------------------------------------------- #
+
+
+def with_sku(item: Line, sku: str) -> Line:
+    return item | {"sku": sku}
+
+
+def test_a_row_the_readers_disagree_on_is_flagged_and_keeps_the_first_reading() -> None:
+    second: dict[int, list[Answer]] = {1: [[line(1)]], 2: [[with_sku(line(2), "SKU-0O2")]]}
+    plain = run(scan(2), "application/pdf", server_for(2))
+    res = run(scan(2), "application/pdf", server_for(2, second), on())
+
+    assert plain.status == "ok"
+    assert res.status == "needs_review" and res.lines == plain.lines
+    (issue,) = res.issues
+    assert issue.to_json() == {
+        "check": "second_reading",
+        "message": "Position 2 on page 2: a second reading by another model gives SKU SKU-0O2 "
+        "instead of SKU-002. One of the two readings is wrong; please check this line.",
+        "line": 1,
+        "page": 2,
+        "severity": "warning",
+        "line_no": 2,
+        "fields": ["line.sku"],
+        "suggestions": [{"set": {"line.sku": "SKU-0O2"}, "source": "second_reading"}],
+    }
+    # Not an issue of the page: the page as the first reader left it.
+    assert [p.issues for p in res.pages] == [[], []]
+    reads = [p.second_reading for p in res.pages]
+    assert [(a.issues, a.lines) for a in reads if a is not None] == [(0, 1), (1, 1)]
+    assert res.notes == []
+
+
+def test_issues_point_at_their_line_in_the_whole_document() -> None:
+    first: dict[int, list[Answer]] = {
+        1: [[line(1), line(2)]],
+        2: [[line(3), line(4), line(5)]],
+        3: [[line(6)]],
+    }
+    second: dict[int, list[Answer]] = {
+        1: [[line(1), line(2, qty=3)]],
+        2: [[line(3), line(4), with_sku(line(5), "SKU-500")]],
+        3: [[line(6)]],
+    }
+    every = [line(n) for n in range(1, 7)]
+    server = Server(header_for(every), first, models={OTHER: Server({}, second)})
+    res = run(scan(3), "application/pdf", server, on())
+    assert [(i.page, i.line, i.line_no, i.fields) for i in res.issues] == [
+        (1, 1, 2, ["line.quantity", "line.amount"]),
+        (2, 4, 5, ["line.sku"]),
+    ]
+    assert all(res.lines[i.line]["line_no"] == i.line_no for i in res.issues if i.line is not None)
+
+
+def test_the_kept_attempt_is_compared_not_the_last_one() -> None:
+    """Both attempts at page 1 fail their checks; the first fails less and is kept. The
+    second reader reads the page as that kept attempt does: no disagreement."""
+    kept = [line(1), line(2, amount=99.0)]  # one wrong line
+    worse = [line(1, amount=1.0), line(2, amount=99.0)]  # two wrong lines
+    every = [line(1), line(2)]
+    server = Server(header_for(every), {1: [kept, worse]}, models={OTHER: Server({}, {1: [kept]})})
+    res = run(scan(1), "application/pdf", server, on())
+    assert len(res.pages[0].attempts) == 2 and res.lines[0]["amount"] == 20.0
+    assert "second_reading" not in [i.check for i in res.issues]
+    assert res.pages[0].second_reading is not None and missing(res) == []
+
+
+def test_a_page_the_first_reader_could_not_read_is_not_compared() -> None:
+    every = [line(1), line(2)]
+    first: dict[int, list[Answer]] = {1: [[line(1)]], 2: [httpx.Response(500, text="down")]}
+    server = Server(header_for(every), first, models={OTHER: Server({}, rows(2))})
+    res = run(scan(2), "application/pdf", server, on())
+    assert "second_reading" not in [i.check for i in res.issues]
+    assert second_readings(res) == {1: None, 2: None}  # both answered
+    assert missing(res) == [
+        {
+            "page": None,
+            "kind": "second_reading_missing",
+            # The page has its own issue saying it was not read: no word about its codes.
+            "text": "Page 2 was read a second time, but the two readings could not be compared.",
+            "source": "second_reading",
+            "pages": [2],
+        }
+    ]
+
+
+def test_unanswered_and_uncompared_pages_share_one_note() -> None:
+    every = [line(p) for p in range(1, 5)]
+    first: dict[int, list[Answer]] = rows(4) | {4: [httpx.Response(500, text="down")]}
+    second: dict[int, list[Answer]] = rows(4) | {1: [httpx.Response(503)], 2: ["data: [DONE]\n\n"]}
+    server = Server(header_for(every), first, models={OTHER: Server({}, second)})
+    res = run(scan(4), "application/pdf", server, on())
+    (note,) = missing(res)
+    assert note["pages"] == [1, 2, 4]
+    assert note["text"] == (
+        "Page 1 was not read a second time: the other model did not answer, or not in time. "
+        "Page 2 has no usable second reading: the other model's answer was broken or had no "
+        "line items. Page 4 was read a second time, but the two readings could not be "
+        "compared. Nothing else checks the item codes (SKUs) on pages 1–2."
+    )
+
+
+def test_a_description_joined_across_a_page_break_raises_nothing() -> None:
+    """The first reader returns the end of a cut description with page 2 and the flow joins
+    it to the last line of page 1; the second reader leaves that description cut."""
+    first: dict[int, list[Answer]] = {
+        1: [{"carry_in": "", "rows": [line(1), line(2) | {"description": "Hex bolt M8"}]}],
+        2: [{"carry_in": "zinc plated", "rows": [line(3)]}],
+    }
+    second: dict[int, list[Answer]] = {
+        1: [[line(1), line(2) | {"description": "Hex bolt M8"}]],
+        2: [[line(3)]],
+    }
+    every = [line(1), line(2), line(3)]
+    server = Server(header_for(every), first, models={OTHER: Server({}, second)})
+    res = run(scan(2), "application/pdf", server, on())
+    assert res.lines[1]["description"] == "Hex bolt M8 zinc plated"
+    assert res.status == "ok" and res.issues == []
+
+
+def test_the_issues_of_the_first_reading_keep_their_positions() -> None:
+    """A scenario with retries, a cut answer and issues of every kind, read once without and
+    once with a second reader that disagrees on page 2: the issues of the first reading are
+    the same, in the same places; the second reading's come after them."""
+    case = by_name("scan_retries")
+    data, mime = case.data()
+
+    def go(cfg: Config) -> Result:
+        model = case.model()
+        other = agreeing(model)
+        p2 = model.pages[2][-1]
+        other.pages[2] = [p2 | {"rows": [with_sku(p2["rows"][0], "SKU-0O3"), *p2["rows"][1:]]}]
+        model.models = {OTHER: other}
+        return run(data, mime, model, cfg)
+
+    plain, twice = go(Config(**case.config)), go(on(Config(**case.config)))
+    before = [i.to_json() for i in plain.issues]
+    assert before and [i.to_json() for i in twice.issues[: len(before)]] == before
+    (added,) = twice.issues[len(before) :]
+    assert (added.check, added.page, added.line_no, added.fields) == (
+        "second_reading",
+        2,
+        3,
+        ["line.sku"],
+    )
+    assert twice.lines[added.line or 0]["sku"] == "SKU-003"
+    assert (plain.status, twice.status) == ("needs_review", "needs_review")
+
+
+def test_a_comparison_that_breaks_leaves_a_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(first: list[Line], second: list[Line], page: int) -> list[Issue]:
+        raise ValueError("unexpected")
+
+    monkeypatch.setattr(sr, "compare_page", broken)
+    second: dict[int, list[Answer]] = {1: [[with_sku(line(1), "X")]], 2: [[line(2)]]}
+    res = run(scan(2), "application/pdf", server_for(2, second), on())
+    assert res.status == "ok" and res.issues == [] and len(res.lines) == 2
+    assert [n["pages"] for n in missing(res)] == [[1, 2]]
+    assert second_readings(res) == {1: None, 2: None}  # the requests are still counted
+    assert res.calls == 5
+
+
+def test_an_empty_second_reading_of_a_page_with_lines_is_only_missing() -> None:
+    res = run(scan(1), "application/pdf", server_for(1, {1: [{"rows": []}]}), on())
+    assert res.status == "ok" and res.issues == []
+    assert [n["text"] for n in missing(res)] == [UNUSABLE]
+    assert res.pages[0].second_reading is not None
+
+
+def test_a_page_kept_from_the_second_readers_model_is_not_compared_with_it() -> None:
+    """The first reader's own retry is by the same model as the second reader: two
+    readings by one model are not two readers."""
+    first: dict[int, list[Answer]] = {1: [[line(1, amount=1.0)]]}
+    same_model = Server({}, {1: [[with_sku(line(1), "SKU-0O1")]]})
+    server = Server(header_for([line(1)]), first, models={OTHER: same_model})
+    res = run(scan(1), "application/pdf", server, on(Config(page_models=(FAST, OTHER))))
+    assert [a.model for a in res.pages[0].attempts] == [FAST, OTHER]
+    assert res.pages[0].model == OTHER and res.lines[0]["sku"] == "SKU-0O1"
+    assert "second_reading" not in [i.check for i in res.issues]
+    assert [n["pages"] for n in missing(res)] == [[1]]
+
+
+def test_the_second_reading_is_repaired_before_it_is_compared() -> None:
+    """The second reader reads the thousands separator of a quantity as a decimal point
+    (6.6 for 6,600); the printed amount proves the repair, as on the first reader's side."""
+    first = [line(1, qty=6600, price=0.5)]
+    second: dict[int, list[Answer]] = {1: [[line(1, qty=6600, price=0.5) | {"quantity": 6.6}]]}
+    server = Server(header_for(first), {1: [first]}, models={OTHER: Server({}, second)})
+    res = run(scan(1), "application/pdf", server, on())
+    assert res.status == "ok" and res.issues == []
+
+
+def test_second_reading_issues_come_after_the_deadline_issue() -> None:
+    """The header's second attempt is cut by the deadline, and the second reader disagrees
+    on a SKU: its issue is the last one, after deadline_exceeded."""
+    rows_1 = [line(1), line(2)]
+    header = header_for(rows_1) | {"total": None}  # asks for a second attempt
+    second: dict[int, list[Answer]] = {1: [[line(1), with_sku(line(2), "SKU-0O2")]]}
+    server = Server(header, {1: [rows_1]}, models={OTHER: Server({}, second)})
+    slow = SlowServer(server, {"header": [0.0, 30.0]})
+    res, took = run_async(scan(1), "application/pdf", slow, on(Config(deadline_s=1.0)))
+    assert took < 3
+    assert [i.check for i in res.issues][-2:] == ["deadline_exceeded", "second_reading"]
+
+
+def test_any_second_answer_keeps_the_result_strict_json() -> None:
+    hostile = {
+        "line_no": 1,
+        "sku": ["SKU-001"],
+        "quantity": float("nan"),
+        "unit_price": float("inf"),
+        "tax_rate": True,
+        "amount": "9" * 400,
+    }
+    second: dict[int, list[Answer]] = {
+        1: [sse('{"rows": [' + json.dumps(hostile) + "]}")],  # NaN, Infinity: JSON allows
+    }
+    res = run(scan(1), "application/pdf", server_for(1, second), on())
+    (issue,) = res.issues
+    assert issue.suggestions == []
+    json.dumps(res.to_json(), allow_nan=False)

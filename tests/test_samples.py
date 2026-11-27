@@ -1,9 +1,11 @@
-"""The sample invoices and recorded answers, read through the page-by-page flow."""
+"""The sample invoices and recorded answers, read through the page-by-page flow
+(the layout road for text-layer PDFs is switched off here)."""
 
 import json
 
 import pytest
 
+from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.evidence import has_text_layer, pdf_text_layer
 from invoice_recognition.recognition.pdf import page_count
 
@@ -25,7 +27,7 @@ def test_sample_read_right_by_the_model_passes_every_check(name: str) -> None:
     data, t, header, pages = truth_doc(name)
     assert page_count(data) == t["meta"]["pages"] == len(pages)
     server = Server(header, {p: [rows] for p, rows in pages.items()})
-    res = run(data, "application/pdf", server)
+    res = run(data, "application/pdf", server, Config(use_layout=False))
     assert res.evidence_source == "text_layer"
     assert [i.to_json() for i in res.issues] == []
     assert res.status == "ok" and exact(res.lines, t["lines"])

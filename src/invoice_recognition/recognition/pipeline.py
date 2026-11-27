@@ -8,6 +8,12 @@ Instead of one request for the whole document:
   - pages are concatenated in order and the document is checked as a whole.
 
 The unit of work, of failure and of retry is a page, not a document.
+
+A PDF with a text layer takes a shorter road (layout.py): the model describes
+the layout of the table once, code reads the rows of every page from the text
+layer, and the model reads one page the usual way as a witness. Pages are
+checked exactly as above; a page that fails is read by the model, and so is
+the whole document if the layout cannot be used or the witness disagrees.
 """
 
 import asyncio
@@ -29,12 +35,13 @@ from invoice_recognition.llm import (
 )
 from invoice_recognition.recognition import checks
 from invoice_recognition.recognition import evidence as ev
+from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.pdf import extract_pages, page_count
 from invoice_recognition.recognition.prompts import EXTRACT_HEADER, EXTRACT_PAGE
 from invoice_recognition.recognition.results import Attempt, PageResult, Result
-from invoice_recognition.shapes import Checkpoint, Doc, Header, Line
+from invoice_recognition.shapes import Checkpoint, Doc, Header, JSONObject, Line
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +241,119 @@ async def read_page(
 
 
 # --------------------------------------------------------------------------- #
+# Text-layer PDF: layout from the model, rows by code
+# --------------------------------------------------------------------------- #
+
+# Parser notes that do not touch any extracted value: reported in Result.notes, never as issues.
+HARMLESS_NOTES = ("unclassified_amount", "total_without_amount", "joined_across_pages")
+
+
+async def ask_layout(
+    client: httpx.AsyncClient, prompt: str, cfg: Config
+) -> tuple[JSONObject | None, list[Attempt], str | None]:
+    """One text-only request. Returns (answer, attempts, why it cannot be used)."""
+    res = await _call(client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90)
+    raw = None if res.error else parse_json(res.text)
+    error = res.error or (
+        None if raw is not None else f"answer is not valid JSON (finish={res.finish_reason})"
+    )
+    return raw, [_attempt(res, 0, 1 if error else 0)], error
+
+
+def layout_pages(
+    parsed: lay.Parsed, n: int, evidence: ev.Evidence
+) -> tuple[dict[int, PageResult], list[JSONObject]]:
+    """Rows found by code -> one PageResult per page, checked like a page read by
+    the model. Also returns the harmless notes of the parser."""
+    by_page: dict[int, list[Line]] = {p: [] for p in range(1, n + 1)}
+    totals: dict[int, list[Checkpoint]] = {p: [] for p in range(1, n + 1)}
+    first: dict[int, int] = {}  # index of the first line of each page within the document
+    for idx, item in enumerate(parsed.lines):
+        first.setdefault(item["page"], idx)
+        by_page[item["page"]].append(
+            {k: (_plain(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
+        )
+    done = 0
+    for p in range(1, n + 1):  # a page without lines starts where the previous one ended
+        first.setdefault(p, done)
+        done = first[p] + len(by_page[p])
+    for c in parsed.checkpoints:
+        totals[c["page"]].append(
+            {
+                "label": c["label"],
+                "amount": _plain(c["amount"]),
+                "after_line": c["after_line"] - first[c["page"]],
+                "page": c["page"],
+            }
+        )
+    pages = {}
+    for p in range(1, n + 1):
+        try:
+            issues = check_page(by_page[p], totals[p], p, evidence)
+        # Fault boundary: a bug here is this page's problem; the model reads it.
+        except Exception as e:
+            logger.warning("checks of page %d found by code failed", p, exc_info=True)
+            issues = [Issue("page_read", f"{type(e).__name__}: {e}", page=p)]
+        issues += [
+            Issue("layout_row", f"{note['kind']}: {note['text']}", page=p)
+            for note in parsed.notes
+            if note["page"] == p and note["kind"] not in HARMLESS_NOTES
+        ]
+        pages[p] = PageResult(p, by_page[p], totals[p], issues, method="layout")
+    return pages, [note for note in parsed.notes if note["kind"] in HARMLESS_NOTES]
+
+
+def compare_witness(code: list[Line], model: list[Line]) -> JSONObject:
+    """Rows of one page found by code against the same page read by the model.
+
+    Arithmetic cannot tell quantity from unit price (q x p = p x q), so a layout
+    answer with the two columns swapped passes every other check. The model
+    reading the page is a second opinion on exactly that. Verdict:
+      confirmed  - more than half of the rows agree in sku, quantity, price, amount
+      swapped    - in more than half, quantity and price are crossed
+      mismatch   - neither: the two readings disagree in some other way
+      unverified - the model returned no rows to compare with
+    Half is the threshold because the outcomes are two far-apart clusters: a
+    right layout disagrees only where the model misread a row (a few percent in
+    the measurements), a wrong one disagrees on every row whose quantity differs
+    from its price. The middle keeps the widest margin from both."""
+    free = list(range(len(model)))
+    same = crossed = 0
+    for c in code:
+        sku = " ".join(str(c.get("sku") or "").upper().split())
+        j = next(
+            (j for j in free if " ".join(str(model[j].get("sku") or "").upper().split()) == sku),
+            None,
+        )
+        if j is None:
+            continue
+        free.remove(j)
+        cq, cp, ca = (checks.dec(c.get(k)) for k in ("quantity", "unit_price", "amount"))
+        mq, mp, ma = (checks.dec(model[j].get(k)) for k in ("quantity", "unit_price", "amount"))
+        if cq is None or cp is None or ca is None or ca != ma:
+            continue
+        if (cq, cp) == (mq, mp):
+            same += 1
+        elif (cq, cp) == (mp, mq):
+            crossed += 1
+    n = max(len(code), len(model))
+    if not model:
+        verdict = "unverified"
+    elif same * 2 > n:
+        verdict = "confirmed"
+    elif crossed * 2 > n:
+        verdict = "swapped"
+    else:
+        verdict = "mismatch"
+    return {"status": verdict, "compared": n, "same": same, "crossed": crossed}
+
+
+def _page_key(pr: PageResult) -> tuple[bool, int, int]:
+    """The order of read_page between attempts: a clean read, then fewer issues, then more lines."""
+    return (any(i.check == "page_read" for i in pr.issues), len(pr.issues), -len(pr.lines))
+
+
+# --------------------------------------------------------------------------- #
 # Whole document
 # --------------------------------------------------------------------------- #
 
@@ -267,6 +387,8 @@ async def process(
     started = time.monotonic()
     sem = asyncio.Semaphore(cfg.concurrency)
     evidence: ev.Evidence | None = None
+    text_pages: list[list[lay.TextLine]] | None = None  # set when the layout road is taken
+    layout_info: JSONObject = {"status": "off", "reason": "not a PDF"}
 
     def failed(issues: list[Issue]) -> Result:
         """Nothing was sent to a model: a result the caller can show, not a crash."""
@@ -290,8 +412,31 @@ async def process(
     try:
         n = page_count(data)
         texts = ev.pdf_text_layer(data)
+        layout_info["reason"] = "no text layer"
         if ev.has_text_layer(texts):  # hard checks only against a text layer
-            evidence = ev.build(texts, "text_layer")
+            try:
+                scanned = lay.scanned_pages(data)
+            # Fault boundary: cannot tell, so read it as if the check did not exist.
+            except Exception:
+                logger.warning("could not look for page images", exc_info=True)
+                scanned = []
+            if scanned:  # a scan with somebody's OCR text over it is still a scan
+                layout_info["reason"] = (
+                    f"page image with text over it (pages {scanned[:5]}): treated as a scan"
+                )
+            else:
+                evidence = ev.build(texts, "text_layer")
+                layout_info["reason"] = "disabled"
+                if cfg.use_layout:
+                    try:
+                        text_pages = lay.text_lines(data)
+                    # Fault boundary: the layout road is an optimisation; without it the
+                    # model reads every page.
+                    except Exception as e:
+                        logger.warning("no text layer with coordinates", exc_info=True)
+                        layout_info["reason"] = (
+                            f"text layer with coordinates is not available: {type(e).__name__}: {e}"
+                        )
         parts = [file_part(extract_pages(data, [p]), mime, f"page{p}.pdf") for p in range(1, n + 1)]
         # The header is read from the first and the last page.
         if n:
@@ -301,21 +446,122 @@ async def process(
         logger.warning("file cannot be read", exc_info=True)
         return failed([Issue("unreadable_file", f"{type(e).__name__}: {e}")])
 
-    async def one(p: int) -> PageResult:
+    async def one(p: int, announce: bool = True) -> PageResult:
         try:
             r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem)
         except Exception as e:  # fault boundary: whatever breaks while reading one page
             logger.warning("page %d could not be read", p, exc_info=True)
             r = PageResult(p, issues=[Issue("page_read", f"{type(e).__name__}: {e}", page=p)])
-        if on_page:
+        if on_page and announce:
             on_page(r)
         return r
 
-    first, *rest = await asyncio.gather(
-        read_header(client, header_part, cfg), *(one(p) for p in range(1, n + 1))
-    )
-    header, header_attempts = cast(tuple[Header, list[Attempt]], first)
-    pages = cast(list[PageResult], rest)
+    layout_attempts: list[Attempt] = []
+    layout_issues: list[Issue] = []
+    notes: list[JSONObject] = []
+    if text_pages is None or evidence is None:
+        first, *rest = await asyncio.gather(
+            read_header(client, header_part, cfg), *(one(p) for p in range(1, n + 1))
+        )
+        header, header_attempts = cast(tuple[Header, list[Attempt]], first)
+        pages = cast(list[PageResult], rest)
+    else:
+        # The page shown to the layout model and read by the witness: the first one with
+        # rows that look like items.
+        wp = next((p.number for p in evidence.pages if p.item_rows), 1)
+
+        async def witness() -> PageResult | None:
+            # The witness is compared with the rows found by code, nothing more.
+            return await one(wp, announce=False) if cfg.layout_witness else None
+
+        (header, header_attempts), (raw, layout_attempts, error), seen = await asyncio.gather(
+            read_header(client, header_part, cfg),
+            ask_layout(client, lay.layout_request(text_pages, wp), cfg),
+            witness(),
+        )
+        by_code: dict[int, PageResult] | None = None
+        if error is None:
+            try:
+                parsed = lay.parse_document(text_pages, lay.resolve(raw, text_pages[wp - 1]))
+                by_code, notes = layout_pages(parsed, n, evidence)
+            except lay.LayoutError as e:  # the answer does not fit the page
+                error = f"{type(e).__name__}: {e}"
+            except Exception as e:  # fault boundary: a bug takes the same way out
+                logger.warning("rows could not be read by the layout", exc_info=True)
+                error = f"{type(e).__name__}: {e}"
+        if by_code is None:
+            layout_info = {"status": "failed", "reason": error}
+        elif seen is None:
+            layout_info = {"status": "unchecked", "reason": "witness page is switched off"}
+        else:
+            layout_info = compare_witness(by_code[wp].lines, seen.lines)
+        layout_info["witness_page"] = wp if cfg.layout_witness else None
+
+        if by_code is None or layout_info["status"] in ("failed", "swapped", "mismatch"):
+            # Fallback for the whole document: every page by the model; the witness page is
+            # already read.
+            notes = []
+            others = await asyncio.gather(
+                *(one(p) for p in range(1, n + 1) if seen is None or p != wp)
+            )
+            pages = sorted([*others, *([seen] if seen else [])], key=lambda r: r.page)
+            if seen and on_page:
+                on_page(seen)
+            if layout_info["status"] != "failed":
+                what = (
+                    "quantity and unit price are crossed"
+                    if layout_info["status"] == "swapped"
+                    else "the rows differ"
+                )
+                layout_issues.append(
+                    Issue(
+                        f"layout_{layout_info['status']}",
+                        page=wp,
+                        message=(
+                            f"rows found by code and rows read by the model disagree on page "
+                            f"{wp}: {what} ({layout_info['same']} of {layout_info['compared']} "
+                            f"agree, {layout_info['crossed']} crossed); the document was read "
+                            "page by page by the model"
+                        ),
+                    )
+                )
+        else:
+            if layout_info["status"] == "unverified":
+                layout_issues.append(
+                    Issue(
+                        "layout_unverified",
+                        page=wp,
+                        message=(
+                            f"the model returned no rows for page {wp}, so nothing confirms "
+                            "which column is quantity and which is unit price"
+                        ),
+                    )
+                )
+            found = by_code
+
+            async def settle(p: int) -> PageResult:
+                """A page found by code stays unless it fails its checks; then the model
+                reads it and the better one is kept."""
+                mine = found[p]
+                theirs = seen if seen is not None and p == wp else None
+                if mine.issues and theirs is None:
+                    theirs = await one(p, announce=False)
+                if theirs is not None and mine.issues and _page_key(theirs) < _page_key(mine):
+                    chosen = theirs
+                else:
+                    chosen = mine
+                    chosen.attempts = theirs.attempts if theirs is not None else []
+                if on_page:
+                    on_page(chosen)
+                return chosen
+
+            pages = list(await asyncio.gather(*(settle(p) for p in range(1, n + 1))))
+            kept = {p.page for p in pages if p.method == "layout"}
+            notes = [note for note in notes if note["page"] in kept]
+    layout_info |= {
+        "pages_layout": sum(1 for p in pages if p.method == "layout"),
+        "pages_model": sum(1 for p in pages if p.method == "model"),
+    }
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []
@@ -339,7 +585,9 @@ async def process(
     if evidence is not None:
         issues += checks.check_header_grounding(doc, evidence)
 
-    all_attempts = header_attempts + [a for p in pages for a in p.attempts]
+    issues += layout_issues
+
+    all_attempts = header_attempts + layout_attempts + [a for p in pages for a in p.attempts]
     status = "failed" if not lines or not header else ("needs_review" if issues else "ok")
     return Result(
         status=status,
@@ -356,4 +604,7 @@ async def process(
         completion_tokens=sum(a.completion_tokens for a in all_attempts),
         header_attempts=header_attempts,
         cost_unknown_calls=sum(1 for a in all_attempts if not a.cost_known),
+        layout=layout_info,
+        layout_attempts=layout_attempts,
+        notes=notes,
     )

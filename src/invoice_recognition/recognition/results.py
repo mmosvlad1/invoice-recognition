@@ -30,6 +30,9 @@ class PageResult:
     issues: list[Issue] = field(default_factory=list)
     attempts: list[Attempt] = field(default_factory=list)
     repaired: int = 0
+    # "model": read by the model; "layout": rows found by code (attempts, if any, are the
+    # witness or a re-read by the model that was not kept).
+    method: str = "model"
 
 
 @dataclass
@@ -48,6 +51,20 @@ class Result:
     completion_tokens: int
     header_attempts: list[Attempt] = field(default_factory=list)
     cost_unknown_calls: int = 0  # requests whose cost was not reported; cost_usd leaves them out
+    layout: JSONObject = field(
+        default_factory=dict
+    )  # how the layout road went: status, reason, ...
+    layout_attempts: list[Attempt] = field(default_factory=list)
+    # What changed no number and is not an issue. Every note has "kind", "page" and "text".
+    # Rows the layout did not explain, and text the layout parser joined across a page
+    # break, also have "row" (the text line on the page).
+    notes: list[JSONObject] = field(default_factory=list)
+
+    @property
+    def method(self) -> str:
+        """How the document was read: "layout" (all pages by code), "model", or "mixed"."""
+        kinds = {p.method for p in self.pages}
+        return "mixed" if len(kinds) > 1 else next(iter(kinds), "model")
 
     def to_json(self) -> JSONObject:
         return {
@@ -64,11 +81,16 @@ class Result:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "header_attempts": [asdict(a) for a in self.header_attempts],
+            "method": self.method,
+            "layout": self.layout,
+            "notes": self.notes,
+            "layout_attempts": [asdict(a) for a in self.layout_attempts],
             "pages": [
                 {
                     "page": p.page,
                     "lines": len(p.lines),
                     "repaired": p.repaired,
+                    "method": p.method,
                     "issues": [i.to_json() for i in p.issues],
                     "attempts": [asdict(a) for a in p.attempts],
                 }

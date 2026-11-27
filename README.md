@@ -131,7 +131,8 @@ curl -H "$AUTH" $API/invoices
 ```
 
 `{"items": [...]}`, newest first: each job without its result, with
-`line_count` and `issue_count` once it is finished. No paging.
+`line_count`, `issue_count` and `open_issue_count` once it is finished. No
+paging.
 
 ### `GET /invoices/{id}/file`: the uploaded file
 

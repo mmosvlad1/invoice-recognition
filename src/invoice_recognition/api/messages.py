@@ -69,6 +69,37 @@ IMAGE_TOO_LARGE = (
 )
 
 # --------------------------------------------------------------------------- #
+# Decisions on issues (review.py)
+# --------------------------------------------------------------------------- #
+
+ISSUE_NOT_FOUND = "This document has no issue with this id."
+# By why the document cannot be reviewed: still being read, or not read at all.
+NOT_REVIEWABLE = {
+    "unfinished": "The document is still being read. Its issues can be decided once it is "
+    "finished.",
+    "failed": "The document could not be read, so it has no issues to decide.",
+}
+NO_SUGGESTIONS = "This issue has no suggested value to accept. Keep the value as read instead."
+NO_SUCH_SUGGESTION = (
+    "This issue has {count} suggested {values}, numbered from 0: there is no number {k}."
+)
+
+
+def resolution_conflict(other: int, field: str, theirs: object, ours: object) -> str:
+    """Why an accepted value cannot be taken: another accepted decision set the same cell
+    (field: "line.amount", "header.total") to a different value."""
+    group, _, key = field.partition(".")
+    names = _COLUMNS if group == "line" else _HEADER_FIELDS
+    cell = f"the {names.get(key, key.replace('_', ' '))}"
+    if group == "line":
+        cell += " of this line"
+    return (
+        f"Issue {other} already sets {cell} to {_shown(theirs)}; this suggestion would set it "
+        f"to {_shown(ours)}. Take that decision back first, or keep the value as read."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # The result (views.py)
 # --------------------------------------------------------------------------- #
 

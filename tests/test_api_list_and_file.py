@@ -54,10 +54,10 @@ async def test_the_list_is_newest_first_without_results_with_counts_once_finishe
     assert [i["id"] for i in listed] == [waiting, held, first]
     assert [i["status"] for i in listed] == ["queued", "processing", "ok"]
     assert all("result" not in i for i in listed)
-    assert [(i["line_count"], i["issue_count"]) for i in listed] == [
-        (None, None),
-        (None, None),
-        (2, 0),
+    assert [(i["line_count"], i["issue_count"], i["open_issue_count"]) for i in listed] == [
+        (None, None, None),
+        (None, None, None),
+        (2, 0, 0),
     ]
     assert listed[0] == {
         "id": waiting,
@@ -72,6 +72,7 @@ async def test_the_list_is_newest_first_without_results_with_counts_once_finishe
         "error": None,
         "line_count": None,
         "issue_count": None,
+        "open_issue_count": None,
     }
 
 

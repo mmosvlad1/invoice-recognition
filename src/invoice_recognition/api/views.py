@@ -24,6 +24,7 @@ request fail; a view that was built always serialises. Every field is sent, so t
 serialisation schema marks each as required.
 """
 
+import dataclasses
 import json
 import logging
 import math
@@ -34,7 +35,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 import numpy as np
 from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue
 
-from invoice_recognition.api import messages
+from invoice_recognition.api import messages, review
 from invoice_recognition.recognition.checks import Issue, dec
 from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import JSONObject, Line
@@ -552,6 +553,9 @@ class JobItem(_View):
     error: JobError | None = Field(description="Only for failed: why.")
     line_count: int | None = Field(description="Once finished; null without a result.")
     issue_count: int | None = Field(description="Once finished; null without a result.")
+    open_issue_count: int | None = Field(
+        description="Issues no one has decided yet (review.open_count); null while review is."
+    )
 
 
 class JobView(_View):
@@ -572,6 +576,60 @@ class JobView(_View):
     result: ResultView | None = Field(
         description="null until finished, and for a job whose reading raised."
     )
+    review: ReviewView | None = Field(
+        description="A person's decisions on the issues; null unless finished as ok or "
+        "needs_review. Decisions never change result, status or issue_count."
+    )
+
+
+class IssueReviewView(_View):
+    """Where the review of one issue stands."""
+
+    id: int = Field(description="The issue's id.")
+    state: Literal["open", "accepted", "kept", "settled"] = Field(
+        description="open: no decision yet. accepted: a suggested value was taken. kept: the "
+        "values as read stand (a person looked). settled: no decision of its own, and every "
+        "issue in its follows_from is accepted with an arithmetic item that sets line.amount."
+    )
+    suggestion: int | None = Field(description="With accepted: which item of `suggestions`.")
+    set: dict[str, JsonValue] | None = Field(
+        description="With accepted: the cells it sets, a copy of that item's set. A cell's "
+        "final value is the set of its accepted decision, else as read."
+    )
+    decided_at: AwareDatetime | None = Field(description="With accepted or kept: when.")
+    settled_by: list[int] = Field(
+        description="With settled: the ids of the accepted issues that settle it; else []."
+    )
+
+
+class ReviewView(_View):
+    """A person's decisions on the issues of a read document; the result is never changed
+    by them."""
+
+    open_count: int = Field(description="Issues in state open.")
+    issues: list[IssueReviewView] = Field(description="One per issue, in id order.")
+
+
+class _Request(BaseModel):
+    # Exactly the documented keys, of exactly their types: a typo is an error, not ignored.
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class AcceptRequest(_Request):
+    """Take item `suggestion` of the issue's suggestions: every cell of its set."""
+
+    action: Literal["accept"]
+    suggestion: int = Field(ge=0, description="The item's position in `suggestions`.")
+
+
+class KeepRequest(_Request):
+    """The values as read stand: a person looked (also "mark as checked")."""
+
+    action: Literal["keep"]
+
+
+# The body of PUT .../resolution, told apart by its action.
+ResolutionRequest = Annotated[AcceptRequest | KeepRequest, Field(discriminator="action")]
 
 
 class _Common(TypedDict):
@@ -610,14 +668,27 @@ class JobList(_View):
     items: list[JobItem] = Field(description="Newest first. No paging.")
 
 
+def review_view(job: Job) -> ReviewView | None:
+    """Where the review of the job's issues stands; None unless it can be reviewed."""
+    found = review.states(job)
+    if found is None:
+        return None
+    issues = [IssueReviewView.model_validate(dataclasses.asdict(s)) for s in found]
+    return ReviewView(open_count=sum(i.state == "open" for i in issues), issues=issues)
+
+
 def job_view(job: Job) -> JobView:
-    return JobView(**_common(job), result=job.view if job.finished else None)
+    return JobView(
+        **_common(job), result=job.view if job.finished else None, review=review_view(job)
+    )
 
 
 def job_item(job: Job) -> JobItem:
     view = job.view if job.finished else None
+    reviewed = review_view(job)
     return JobItem(
         **_common(job),
         line_count=None if view is None else len(view.lines),
         issue_count=None if view is None else len(view.issues),
+        open_issue_count=None if reviewed is None else reviewed.open_count,
     )

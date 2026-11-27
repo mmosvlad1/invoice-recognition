@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
+from invoice_recognition.api.review import Decision
 from invoice_recognition.api.views import JobError, ResultView
 from invoice_recognition.recognition.results import Result
 
@@ -57,6 +58,8 @@ class Job:
     result: Result | None = None
     view: ResultView | None = None  # the result as the API shows it, built once
     error: JobError | None = None
+    # A person's decision on each issue of the view, by issue id (review.py).
+    decisions: dict[int, Decision] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.filename = safe_filename(self.filename)

@@ -1,0 +1,4 @@
+# PDF.js, vendored unmodified: not counted as this project's code, and no diffs of its
+# two minified scripts (its README and LICENSE stay readable in a diff).
+src/invoice_recognition/web/static/vendor/** linguist-vendored
+src/invoice_recognition/web/static/vendor/**/*.mjs -diff

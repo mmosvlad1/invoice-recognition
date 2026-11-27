@@ -1,17 +1,22 @@
 """The layout parser on its own: text lines with coordinates, the model's answer turned
 into column anchors, and rows cut into cells."""
 
+import io
+import math
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
 import pytest
+from reportlab.pdfgen import canvas
 
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition.layout import Column, Layout, TextLine, Word, parse_document
 from invoice_recognition.shapes import JSONObject
 
+from boxes_help import Oracle
 from fakes import make_pdf
+from samples import INVOICES, TEXT_LAYER
 
 
 def left(text: str, x0: float) -> Word:
@@ -266,6 +271,90 @@ def test_text_lines_keep_the_words_and_their_x() -> None:
     first = pages[0][0]
     assert (first.page, first.index) == (1, 1) and first.words[0].x0 == pytest.approx(40, abs=1)
     assert first.words[0].x1 < first.words[1].x0 < first.words[2].x0
+
+
+def _outward(rect: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    """Rounded outwards to 0.1 point, as a rectangle of the flow is."""
+    x0, y0, x1, y1 = (round(v * 10, 6) for v in rect)
+    return math.floor(x0) / 10, math.floor(y0) / 10, math.ceil(x1) / 10, math.ceil(y1) / 10
+
+
+@pytest.mark.parametrize("name", TEXT_LAYER)
+def test_text_lines_keep_the_box_of_every_word(name: str) -> None:
+    """pdfium, asked what is printed inside each word's box, names exactly that word."""
+    data = (INVOICES / f"{name}.pdf").read_bytes()
+    words = 0
+    with Oracle(data) as oracle:
+        for page in lay.text_lines(data):
+            for tl in page:
+                # These pages are not turned and their box starts at the origin, so the
+                # page as displayed is user space with y flipped.
+                pdf_page = oracle.pdf[tl.page - 1]
+                assert pdf_page.get_rotation() == 0 and pdf_page.get_bbox()[:2] == (0, 0)
+                height = oracle.size(tl.page)[1]
+                for w in tl.words:
+                    assert w.bottom < w.top, (tl.page, w)
+                    rect = _outward((w.x0, height - w.top, w.x1, height - w.bottom))
+                    assert oracle.text_under(tl.page, rect) == w.text, (tl.page, tl.index, w)
+                    words += 1
+    assert words > 300
+
+
+def test_a_word_in_two_font_sizes_spans_its_tallest_character() -> None:
+    """ "abXcd" with a large X in the middle, then a large X alone on the same baseline:
+    the word reaches as low and as high as the X, not as its first or last character."""
+    buf = io.BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=(595, 842), invariant=True)
+    text = pdf.beginText(40, 700)
+    for size, chunk in ((9, "ab"), (24, "X"), (9, "cd "), (24, "X")):
+        text.setFont("Helvetica", size)
+        text.textOut(chunk)
+    pdf.drawText(text)
+    pdf.showPage()
+    pdf.save()
+    ((tl,),) = lay.text_lines(buf.getvalue())
+    mixed, big = tl.words
+    assert (mixed.text, big.text) == ("abXcd", "X")
+    assert (mixed.bottom, mixed.top) == pytest.approx((big.bottom, big.top), abs=0.01)
+    assert mixed.top - mixed.bottom > 20
+
+
+def test_the_band_of_a_word_is_set_by_its_baseline_and_size_on_every_platform() -> None:
+    """Across its line a word takes DESCENT below to ASCENT above its baseline, in ems of
+    its size through the text matrix: numbers from the PDF itself, the same on every
+    platform whatever font pdfium substitutes for the standard Helvetica. Along the line
+    it keeps pdfium's extent; text written upwards (a page drawn turned) has its band in
+    X."""
+    buf = io.BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=(595, 842), invariant=True)
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(50, 700, "Plain")
+    text = pdf.beginText()
+    text.setTextTransform(9, 0, 0, 9, 50, 600)  # size 1, scaled by the text matrix
+    text.setFont("Helvetica", 1)
+    text.textOut("Scaled")
+    pdf.drawText(text)
+    text = pdf.beginText()
+    text.setTextTransform(0, 9, -9, 0, 300, 300)  # written upwards
+    text.setFont("Helvetica", 1)
+    text.textOut("Upwards")
+    pdf.drawText(text)
+    pdf.showPage()
+    pdf.save()
+    words = {w.text: w for tl in lay.text_lines(buf.getvalue())[0] for w in tl.words}
+    em = 9 * lay.DESCENT, 9 * lay.ASCENT
+    assert (words["Plain"].bottom, words["Plain"].top) == pytest.approx((700 - em[0], 700 + em[1]))
+    assert (words["Scaled"].bottom, words["Scaled"].top) == pytest.approx(
+        (600 - em[0], 600 + em[1])
+    )
+    assert words["Plain"].x0 == pytest.approx(50) and words["Plain"].x1 > 70
+    up = words["Upwards"]  # up is towards -X: the band runs from 300 + descent to 300 - ascent
+    assert (up.x0, up.x1) == pytest.approx((300 - em[1], 300 + em[0]))
+    assert up.bottom == pytest.approx(300) and up.top > 330
+
+
+def test_a_word_built_by_hand_has_no_height() -> None:
+    assert Word("A-1", 40.0, 55.0) == Word("A-1", 40.0, 55.0, 0.0, 0.0)
 
 
 def test_layout_request_shows_the_page_and_the_top_of_the_next() -> None:

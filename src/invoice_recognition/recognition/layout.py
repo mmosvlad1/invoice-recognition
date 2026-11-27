@@ -46,11 +46,36 @@ X_TOL = 1.0  # points; loose glyph boxes of one column edge agree to ~0.1 pt in 
 # --------------------------------------------------------------------------- #
 
 
+# The band a character takes across its line, in ems of its font from the baseline: a
+# fixed rule, not the font's own ascent and descent. pdfium takes those from the font
+# file, and for a font the PDF does not embed (the standard Helvetica, Times, Courier)
+# from a substitute that differs between platforms: the loose box of a Helvetica "c" is
+# 0.905 em above the baseline and 0.211 below on macOS, 0.945 and 0.224 on Linux, and on
+# Linux a wrapped line's box reached into the descenders of the line above. The
+# baseline, the font size and the text matrix come from the PDF itself. Capital letters
+# and digits reach about 0.72 em, descenders about 0.21 em: these keep every character
+# of the line inside or touching the band, and the band clear of lines set at least
+# about 0.95 em apart.
+ASCENT = 0.75
+DESCENT = 0.2
+
+
 @dataclass
 class Word:
+    """A word of the text layer: where it lies along its line (from pdfium's loose
+    character boxes: their advance comes from the font's widths, the same everywhere)
+    and across it (ASCENT and DESCENT from the baseline). For text written along X, the
+    usual case, x0 and x1 are along the line and bottom and top across it; for text
+    written along Y (a page drawn turned), the other way round. Coordinates are PDF user
+    space, as pdfium gives them: not turned by /Rotate and not moved to the crop box
+    (boxes.PageFrame places them on the page as displayed). A word built by hand has no
+    height (0.0, 0.0)."""
+
     text: str
     x0: float
     x1: float
+    bottom: float = 0.0
+    top: float = 0.0
 
 
 @dataclass
@@ -65,12 +90,12 @@ class TextLine:
 
 
 def text_lines(data: bytes) -> list[list[TextLine]]:
-    """Text lines of every page, each word with its left and right X.
+    """Text lines of every page, each word with its left and right X and its bottom
+    and top Y: the union of the boxes of its characters (_char_box).
 
     Lines are the same as in `evidence.pdf_text_layer` (pdfium's own line
     breaks), so row counts are comparable with the evidence module."""
     pdf = pdfium.PdfDocument(data)
-    rect = pdfium_c.FS_RECTF()
     out: list[list[TextLine]] = []
     try:
         for pno, page in enumerate(pdf, start=1):
@@ -87,12 +112,13 @@ def text_lines(data: bytes) -> list[list[TextLine]]:
                     if ch == "\n":
                         rows.append([])
                     continue
-                pdfium_c.FPDFText_GetLooseCharBox(tp, i, ctypes.byref(rect))
+                left, bottom, right, top = _char_box(tp, i)
                 if cur is None:
-                    cur = Word(ch, rect.left, rect.right)
+                    cur = Word(ch, left, right, bottom, top)
                 else:
                     cur.text += ch
-                    cur.x0, cur.x1 = min(cur.x0, rect.left), max(cur.x1, rect.right)
+                    cur.x0, cur.x1 = min(cur.x0, left), max(cur.x1, right)
+                    cur.bottom, cur.top = min(cur.bottom, bottom), max(cur.top, top)
             if cur is not None:
                 rows[-1].append(cur)
             tp.close()
@@ -101,6 +127,34 @@ def text_lines(data: bytes) -> list[list[TextLine]]:
     finally:
         pdf.close()
     return out
+
+
+def _char_box(tp: Any, i: int) -> tuple[float, float, float, float]:
+    """(left, bottom, right, top) of character i: along its line from pdfium's loose
+    box, across it the band from DESCENT below to ASCENT above the baseline. The loose
+    box as it is when the character has no usable matrix or size."""
+    rect = pdfium_c.FS_RECTF()
+    pdfium_c.FPDFText_GetLooseCharBox(tp, i, ctypes.byref(rect))
+    matrix = pdfium_c.FS_MATRIX()
+    x, y = ctypes.c_double(), ctypes.c_double()
+    size = pdfium_c.FPDFText_GetFontSize(tp, i)
+    if (
+        not pdfium_c.FPDFText_GetMatrix(tp, i, ctypes.byref(matrix))
+        or not pdfium_c.FPDFText_GetCharOrigin(tp, i, ctypes.byref(x), ctypes.byref(y))
+        or not size > 0
+    ):
+        return rect.left, rect.bottom, rect.right, rect.top
+    # One em upwards in user space: the font size through the character's matrix.
+    up_x, up_y = matrix.c * size, matrix.d * size
+    if abs(matrix.a) >= abs(matrix.b):  # written along X
+        ends = (y.value - DESCENT * up_y, y.value + ASCENT * up_y)
+        if ends[0] == ends[1]:
+            return rect.left, rect.bottom, rect.right, rect.top
+        return rect.left, min(ends), rect.right, max(ends)
+    ends = (x.value - DESCENT * up_x, x.value + ASCENT * up_x)  # written along Y
+    if ends[0] == ends[1]:
+        return rect.left, rect.bottom, rect.right, rect.top
+    return min(ends), rect.bottom, max(ends), rect.top
 
 
 def scanned_pages(data: bytes, min_cover: float = 0.85) -> list[int]:

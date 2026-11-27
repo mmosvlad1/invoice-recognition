@@ -111,6 +111,15 @@ function reviewMarkup(job) {
   if (job.result) {
     out.push(headerFields(job.result, job.review), details(job.result), failedPanel({ ...job, status: "failed" }));
     for (const showAll of [false, true]) out.push(resultPane(job, { showAll, selected: 0 }));
+    // Every issue decided: accepted with its first item where it has one, else kept.
+    const review = job.result.issues.length && {
+      open_count: 0,
+      issues: job.result.issues.map((i) => {
+        const set = i.suggestions?.[0]?.set ?? null;
+        return { id: i.id, state: set ? "accepted" : "kept", suggestion: set ? 0 : null, set, decided_at: null, settled_by: [] };
+      }),
+    };
+    if (review) out.push(resultPane({ ...job, review }, { showAll: true, selected: 0 }), headerFields(job.result, review));
   } else {
     out.push(failedPanel(job));
   }
@@ -203,4 +212,78 @@ test("a doubtful cell says so on hover, a row says what selecting it does", { sk
   const out = String(resultPane(job, { showAll: false, selected: null }));
   assert.match(out, /class="cell num amount doubt" title="In doubt"/);
   assert.match(out, /aria-label="Row on page 2: [^"]*\. Show on the page"/);
+});
+
+// ------------------------------------------------------------------ decisions on the screen
+
+test("decided and settled issues on the small sample, as the API answers them", { skip: !DIR && "run through pytest" }, () => {
+  const job = answers(".job.json").find((j) => j.status === "needs_review");
+  const open = String(resultPane(job, { showAll: false, selected: null }));
+  assert.match(open, /5 issues open/);
+  assert.match(open, /Set amount to 688\.68<span class="agrees">matches the subtotal<\/span>/);
+  assert.match(open, /data-body="\{&quot;action&quot;:&quot;accept&quot;,&quot;suggestion&quot;:2\}"/);
+  assert.equal((open.match(/This also explains:/g) ?? []).length, 3);
+
+  const entry = (id, state, extra = {}) => ({ id, state, suggestion: null, set: null, decided_at: null, settled_by: [], ...extra });
+  const review = {
+    open_count: 0,
+    issues: [
+      entry(0, "accepted", { suggestion: 2, set: { "line.amount": 688.68 } }),
+      entry(1, "kept"),
+      ...[2, 3, 4].map((id) => entry(id, "settled", { settled_by: [0] })),
+    ],
+  };
+  const done = String(resultPane({ ...job, review }, { showAll: false, selected: null }));
+  assert.match(done, /All 5 issues checked/);
+  assert.match(done, /<span class="cell num amount fixed"><span>688\.68<\/span><span class="was">344\.34<\/span><\/span>/);
+  assert.match(done, /Accepted amount 688\.68/);
+  assert.match(done, /Marked as checked/);
+  assert.equal((done.match(/Settled by the amount accepted above/g) ?? []).length, 3);
+  assert.equal((done.match(/data-undo=/g) ?? []).length, 2);
+  assert.match(done, /class="allclear"/);
+  assert.doesNotMatch(done, /class="cell[^"]*doubt/);
+  assert.match(String(reviewStatus({ ...job, review })), /all checked/);
+  assert.match(String(headerFields(job.result, review)), /class="money checked"><dt>Subtotal/);
+});
+
+test("a decision on its way disables its buttons; a refusal is shown under it", { skip: !DIR && "run through pytest" }, () => {
+  const job = answers(".job.json").find((j) => j.status === "needs_review");
+  const out = String(resultPane(job, { showAll: false, selected: null, pending: new Set([0]), errors: new Map([[1, PAYLOAD]]) }));
+  assert.equal((out.match(/data-issue="0"[^>]*disabled/g) ?? []).length, 4);
+  assert.match(out, /<p class="issue-error" role="alert">&quot;&gt;&lt;img/);
+});
+
+// ------------------------------------------------------------------ a second reading
+
+test("a second reading's issues: a line with its values, a column of a page, a page", () => {
+  const scan = {
+    ...RESULT,
+    lines: [{ ...LINE, page: 3, sku: "SG-54O66", quantity: 12 }],
+    issues: [
+      {
+        id: 0, code: "second_reading", severity: "warning", message: "Line 1 on page 3: a second reading gives another item code.",
+        line_index: 0, line_no: 1, page: 3, fields: ["line.sku"], follows_from: [],
+        suggestions: [{ set: { "line.sku": "SG-54066" }, source: "second_reading" }],
+      },
+      {
+        id: 1, code: "second_reading", severity: "warning", message: "On page 3 a second reading gives a different quantity.",
+        line_index: null, line_no: null, page: 3, fields: ["line.quantity"], follows_from: [], suggestions: [],
+      },
+      {
+        id: 2, code: "second_reading", severity: "warning", message: "Page 4: a second reading finds 12 line items.",
+        line_index: null, line_no: null, page: 4, fields: [], follows_from: [], suggestions: [],
+      },
+    ],
+    details: { ...DETAILS, attempts: [{ ...DETAILS.attempts[0], what: "second_reading", page: 3 }] },
+  };
+  const entry = (id) => ({ id, state: "open", suggestion: null, set: null, decided_at: null, settled_by: [] });
+  const job = { result: scan, review: { open_count: 3, issues: [0, 1, 2].map(entry) } };
+  const out = String(resultPane(job, { showAll: false, selected: null }));
+  assert.match(out, /Accept SG-54066/);
+  assert.match(out, /Keep SG-54O66/);
+  assert.match(out, /class="cell sku doubt" title="In doubt"><span>SG-54O66/);
+  assert.match(out, /Page 3<\/button>\s*<p>On page 3 a second reading gives a different quantity\./);
+  assert.match(out, /Page 4<\/button>/);
+  assert.equal((out.match(/Mark as checked/g) ?? []).length, 2);
+  assert.match(String(details(scan)), /<td>second reading<\/td><td>3<\/td>/);
 });

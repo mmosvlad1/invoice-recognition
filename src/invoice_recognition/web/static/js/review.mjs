@@ -17,7 +17,19 @@ import {
   reviewStatus,
   withBack,
 } from "./html.mjs";
-import { finishedText, firstOpenLine, lineAt, placeIssues, rowBox, screenLife, stateOf, target, unfinished } from "./model.mjs";
+import {
+  decidedText,
+  finishedText,
+  firstOpenLine,
+  framedFields,
+  lineAt,
+  placeIssues,
+  rowBox,
+  screenLife,
+  stateOf,
+  target,
+  unfinished,
+} from "./model.mjs";
 import { createViewer } from "./viewer.mjs";
 
 /**
@@ -37,6 +49,8 @@ export function showReview(view, id, { announce, onUploadAnother }) {
     autoselected: false,
     viewer: null,
     shown: false, // the viewer has shown the first selection
+    pending: new Set(), // issues whose decision is on its way
+    errors: new Map(), // issue id -> why the server refused a decision
     driver: "none", // the pane a person last touched: "rows" | "doc"
   };
   const $ = (elementId) => document.getElementById(elementId);
@@ -115,7 +129,7 @@ export function showReview(view, id, { announce, onUploadAnother }) {
     const { result, review } = S.job;
     const marks = [];
     for (const issue of S.viewer.isPhoto ? [] : result.issues) {
-      const t = target(issue, result, sizes());
+      const t = target({ ...issue, fields: framedFields(issue, review) }, result, sizes());
       const done = stateOf(review, issue.id) !== "open";
       for (const box of t?.frames ?? []) marks.push({ page: t.page, box, kind: "value", done, line: issue.line_index });
       if (t?.band) marks.push({ page: t.page, box: t.band, kind: "band", done, line: issue.line_index });
@@ -250,6 +264,11 @@ export function showReview(view, id, { announce, onUploadAnother }) {
       polling.kick();
     } else if (clicked.closest("[data-action=upload-another]")) {
       onUploadAnother();
+    } else if (clicked.closest("[data-body]")) {
+      const button = clicked.closest("[data-body]");
+      decide(Number(button.dataset.issue), JSON.parse(button.dataset.body));
+    } else if (clicked.closest("[data-undo]")) {
+      decide(Number(clicked.closest("[data-undo]").dataset.undo), null);
     } else if (clicked.closest(".row-main")) {
       select(Number(clicked.closest(".row").dataset.line));
     } else if (clicked.closest(".docissue-title")) {
@@ -257,6 +276,50 @@ export function showReview(view, id, { announce, onUploadAnother }) {
       select(null);
       if (page) showPage(Number(page));
     }
+  }
+
+  /** Send a decision (`body` null: take it back); the answer is the new review. */
+  async function decide(issueId, body) {
+    if (S.pending.has(issueId)) return;
+    const issue = S.job.result.issues[issueId];
+    S.pending.add(issueId);
+    S.errors.delete(issueId);
+    if (issue.line_index != null) S.selected = issue.line_index;
+    render();
+    let review;
+    try {
+      review = await life.guard(body ? api.decide(id, issueId, body) : api.undo(id, issueId));
+    } catch (problem) {
+      if (problem.code === "left") return;
+      S.pending.delete(issueId);
+      if (problem.status === 404 && problem.code === "not_found") {
+        put(view, notFound(problem.detail));
+        polling.stop();
+        return;
+      }
+      S.errors.set(issueId, problem.detail);
+      render();
+      return;
+    }
+    S.pending.delete(issueId);
+    S.job = { ...S.job, review };
+    S.version = JSON.stringify([S.job.status, S.job.progress, review]);
+    render();
+    const entry = review.issues[issueId];
+    announce(entry.state === "open" ? "Decision taken back." : `${decidedText(issue, entry)}.`);
+    const focus = entry.state === "open" ? `choice-${issueId}-0` : `undo-${issueId}`;
+    reveal($("r-body").querySelector(`[data-focus="${focus}"]`));
+  }
+
+  /** Focus `element` and scroll the rows pane (only it) as far as needed to show it. */
+  function reveal(element) {
+    if (!element) return;
+    element.focus({ preventScroll: true });
+    const pane = $("datapane");
+    const box = element.getBoundingClientRect();
+    const frame = pane.getBoundingClientRect();
+    if (box.top < frame.top + 40) pane.scrollTop -= frame.top + 40 - box.top; // under the sticky head
+    else if (box.bottom > frame.bottom) pane.scrollTop += box.bottom - frame.bottom + 8;
   }
 
   function onKey(e) {

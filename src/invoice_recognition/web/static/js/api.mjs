@@ -97,6 +97,15 @@ const json = async (path, init) => (await request(path, init)).json();
 export const list = () => json("/invoices");
 export const get = (id) => json(`/invoices/${id}`);
 
+const resolution = (id, issueId) => `/invoices/${id}/issues/${issueId}/resolution`;
+
+/** Decide on an issue: {action: "accept", suggestion: k} or {action: "keep"}; the review. */
+export const decide = (id, issueId, body) =>
+  json(resolution(id, issueId), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+/** Take a decision back; the review. */
+export const undo = (id, issueId) => json(resolution(id, issueId), { method: "DELETE" });
+
 /** The uploaded file, as a Blob: fetched with the code, never by URL. */
 export const file = async (id) => (await request(`/invoices/${id}/file`)).blob();
 

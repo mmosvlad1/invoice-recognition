@@ -10,6 +10,7 @@ from PIL import ImageFilter
 from invoice_recognition.api import messages
 from invoice_recognition.api.views import JobError, job_error, result_view
 from invoice_recognition.recognition.checks import Issue
+from invoice_recognition.recognition.config import OTHER, Config
 from invoice_recognition.recognition.results import Attempt, PageResult, Result
 from invoice_recognition.shapes import JSONObject
 
@@ -236,3 +237,14 @@ def test_a_photo_that_was_read_is_not_a_photo_problem() -> None:
     rows = [line(1)]
     res = run(drawn.jpeg(drawn.photo()), "image/jpeg", Server(header_for(rows), {1: [rows]}))
     assert res.status in ("ok", "needs_review") and job_error("image", res) is None
+
+
+def test_a_real_scan_whose_first_model_is_down_is_model_unavailable() -> None:
+    """The flow's own result: every request to the first model fails while the second
+    reader answers each page."""
+    down: dict[int, list[Answer]] = {p: [httpx.Response(503, text="down")] for p in (1, 2)}
+    other = Server({}, {p: [[line(p)]] for p in (1, 2)})
+    server = Server(httpx.Response(503, text="down"), down, models={OTHER: other})
+    res = run(drawn.scan(2), "application/pdf", server, Config(second_reading_model=OTHER))
+    assert res.status == "failed" and all(p.second_reading for p in res.pages)
+    assert code("pdf", res) == "model_unavailable"

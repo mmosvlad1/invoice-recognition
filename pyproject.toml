@@ -10,6 +10,7 @@ requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.29.0",
     "pypdf>=7.2.0",
+    "pypdfium2>=5.15.2",
 ]
 
 [dependency-groups]
@@ -48,3 +49,10 @@ known-local-folder = ["fakes"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
+# pypdfium2 ships no type information (no py.typed, no stubs). Following its
+# untyped code gives nothing to check (every value is Any) and trips
+# no-untyped-call under strict, so treat the module as Any.
+[[tool.mypy.overrides]]
+module = ["pypdfium2", "pypdfium2.*"]
+ignore_missing_imports = true

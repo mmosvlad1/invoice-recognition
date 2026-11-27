@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from invoice_recognition.llm import parse_json
 from invoice_recognition.recognition.checks import (
     Issue,
     check_checkpoints,
@@ -347,3 +348,36 @@ def test_coverage_per_page_and_for_the_document() -> None:
     assert messages(check_coverage({"lines": [line(1)]}, ev)) == [
         "3 item rows printed, 1 extracted"
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Numbers that are not finite
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "value", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity", "-Infinity", "sNaN"]
+)
+def test_dec_treats_a_non_finite_number_as_missing(value: object) -> None:
+    assert dec(value) is None
+
+
+def test_non_finite_numbers_from_the_model_do_not_crash_the_checks() -> None:
+    # Python's JSON parser accepts NaN and Infinity, so a model can send them.
+    doc = parse_json(
+        '{"header": {"supplier_name": "ACME", "subtotal": NaN, "tax_total": 4, "total": 24,'
+        ' "invoice_number": "INV-1", "tax_breakdown": [{"rate": 20, "base": Infinity, "tax": 4}]},'
+        ' "lines": [{"line_no": 1, "sku": "SKU-001", "quantity": NaN, "unit_price": 10,'
+        ' "amount": 20, "tax_rate": Infinity, "page": 1}],'
+        ' "checkpoints": [{"amount": -Infinity, "after_line": 1, "page": 1}]}'
+    )
+    assert doc is not None
+    ev = build(["SKU-001 Item 1 2 10.00 20.00\nTotal 24.00 INV-1"], "text_layer")
+    assert messages(check_doc_sums(doc)) == ["totals are missing in the header"]
+    assert messages(check_line_math(doc)) == ["quantity, unit price or amount is missing"]
+    assert messages(check_tax(doc)) == []  # neither the line's rate nor the printed base is known
+    assert check_checkpoints(doc) == []
+    assert check_numbering(doc) == []
+    assert check_grounding(doc, ev) == []  # the sku and the known numbers are on one row
+    assert check_header_grounding(doc, ev) == []
+    assert check_coverage(doc, ev) == []

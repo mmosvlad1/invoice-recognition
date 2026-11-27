@@ -42,13 +42,17 @@ class Issue:
 
 def dec(v: object) -> Decimal | None:
     """A number from the model's JSON: a number or a string ("20%" included).
-    None if it is not one."""
+    None if it is not one.
+
+    NaN and infinity are None too: Python's JSON parser accepts them, and a
+    comparison with a NaN Decimal raises, which would crash every check."""
     if v is None or isinstance(v, bool):
         return None
     try:
-        return Decimal(str(v).strip().rstrip("%"))
+        d = Decimal(str(v).strip().rstrip("%"))
     except InvalidOperation, ValueError:
         return None
+    return d if d.is_finite() else None
 
 
 def _lines(doc: Doc) -> list[Line]:

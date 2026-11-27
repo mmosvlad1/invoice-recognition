@@ -70,6 +70,12 @@ def test_printed_forms_of_a_negative_number() -> None:
     assert {"-1,500.00", "-1.500,00", "-1500"} <= printed_forms(Decimal(-1500))
 
 
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "sNaN"])
+def test_printed_forms_need_a_finite_number(value: str) -> None:
+    with pytest.raises(ValueError, match="not a finite number"):
+        printed_forms(Decimal(value))
+
+
 # --------------------------------------------------------------------------- #
 # Item rows and the number format
 # --------------------------------------------------------------------------- #

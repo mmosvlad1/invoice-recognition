@@ -433,6 +433,14 @@ def stronger_model_note(pr: PageResult) -> JSONObject:
 # Parser notes that do not touch any extracted value: reported in Result.notes, never as issues.
 HARMLESS_NOTES = ("unclassified_amount", "total_without_amount", "joined_across_pages")
 
+# The fields a parser note that becomes an issue is about. A note names a text row of the
+# page, not a line item, so the issue has no line and these are columns. Words outside
+# every column ("stray_words") belong to no known cell.
+NOTE_FIELDS = {"no_tax_rate": ["line.tax_rate"], "text_under_item": ["line.description"]}
+
+# Quantity and unit price, the two columns arithmetic cannot tell apart (q x p = p x q).
+CROSSED_COLUMNS = ["line.quantity", "line.unit_price"]
+
 
 async def ask_layout(
     client: httpx.AsyncClient, prompt: str, cfg: Config, *, gate: Gate | None = None
@@ -489,7 +497,12 @@ def layout_pages(
             logger.warning("checks of page %d found by code failed", p, exc_info=True)
             issues = [Issue("page_read", f"{type(e).__name__}: {e}", page=p)]
         issues += [
-            Issue("layout_row", f"{note['kind']}: {note['text']}", page=p)
+            Issue(
+                "layout_row",
+                f"{note['kind']}: {note['text']}",
+                page=p,
+                fields=list(NOTE_FIELDS.get(note["kind"], [])),
+            )
             for note in parsed.notes
             if note["page"] == p and note["kind"] not in HARMLESS_NOTES
         ]
@@ -1130,6 +1143,9 @@ async def _read(
                             f"agree, {layout_info['crossed']} crossed); the document was read "
                             "page by page by the model"
                         ),
+                        # Crossed columns: one issue for the document, about the two
+                        # columns (no line), never one per row.
+                        fields=list(CROSSED_COLUMNS) if layout_info["status"] == "swapped" else [],
                     )
                 )
         else:
@@ -1141,7 +1157,9 @@ async def _read(
                     else f"the model returned no rows for page {wp}, so nothing confirms "
                     "which column is quantity and which is unit price"
                 )
-                layout_issues.append(Issue("layout_unverified", page=wp, message=why))
+                layout_issues.append(
+                    Issue("layout_unverified", page=wp, message=why, fields=list(CROSSED_COLUMNS))
+                )
             found = by_code
 
             async def settle(p: int) -> PageResult:

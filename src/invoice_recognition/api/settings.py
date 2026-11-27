@@ -12,6 +12,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from invoice_recognition.recognition.config import FAST, MAX_IMAGE_PIXELS
 
+MIN_ACCESS_CODE = 16
+"""The shortest access code accepted. `secrets.token_urlsafe(24)` gives 32 characters."""
+
+
+def _printable(text: str) -> bool:
+    return all("!" <= c <= "~" for c in text)
+
 
 class Settings(BaseSettings):
     # Other variables in the environment or in .env are not ours: ignored, never an error.
@@ -19,6 +26,11 @@ class Settings(BaseSettings):
 
     openrouter_api_key: SecretStr = Field(
         description="The OpenRouter API key every model request is sent with. Required."
+    )
+    access_code: SecretStr = Field(
+        default=SecretStr(""),
+        description="The code every /invoices request must carry (Authorization: Bearer). "
+        "Empty: no check, for local development only.",
     )
 
     # The checks of an upload.
@@ -67,13 +79,31 @@ class Settings(BaseSettings):
         not be empty and may hold only printable ASCII without spaces. The message never
         shows the key."""
         key = value.get_secret_value().strip()
-        if not key or not all("!" <= c <= "~" for c in key):
+        if not key or not _printable(key):
             raise PydanticCustomError(
                 "api_key_format",
                 "it must not be empty and may contain only printable ASCII characters, "
                 "without spaces",
             )
         return SecretStr(key)
+
+    @field_validator("access_code")
+    @classmethod
+    def _usable_in_a_header(cls, value: SecretStr) -> SecretStr:
+        """Stripped like the key. Empty switches the check off; otherwise at least
+        MIN_ACCESS_CODE characters (the address of the service is public, so a short code
+        could be guessed) of printable ASCII without spaces, so that any client (a
+        browser's fetch included) can send it in a header exactly as it is written. The
+        message never shows the code."""
+        code = value.get_secret_value().strip()
+        if code and (len(code) < MIN_ACCESS_CODE or not _printable(code)):
+            raise PydanticCustomError(
+                "access_code_format",
+                "it must be at least {length} characters long and may contain only printable "
+                "ASCII characters, without spaces; leave it empty to switch the check off",
+                {"length": MIN_ACCESS_CODE},
+            )
+        return SecretStr(code)
 
     @model_validator(mode="after")
     def _room_for_every_unfinished_job(self) -> Self:

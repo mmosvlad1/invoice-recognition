@@ -15,9 +15,10 @@ ROOT = Path(__file__).parent.parent
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """No key in the environment and an empty working directory, whatever the developer's
-    shell holds: each test writes the .env it needs."""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    """No setting in the environment and an empty working directory, whatever the
+    developer's shell holds: each test writes the .env it needs."""
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -127,4 +128,45 @@ def test_the_served_app_refuses_to_start_without_a_key(clean: Path) -> None:
         "Settings are read from the environment and from a .env file. "
         "Copy .env.example to .env, fill it in and start the server again; "
         "with `fastapi dev`, stop it first with Ctrl+C.\n"
+    )
+
+
+def test_the_limits_and_models_have_the_agreed_defaults() -> None:
+    s = Settings(_env_file=None, openrouter_api_key=SecretStr("k"))
+    assert (s.max_documents, s.reading_at_once, s.model_requests_in_flight) == (10, 3, 24)
+    assert (s.deadline_s, s.jobs_kept) == (240, 50)
+    assert s.page_model == s.header_model == s.layout_model == "google/gemini-3.1-flash-lite"
+
+
+def test_the_limits_are_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setenv("READING_AT_ONCE", "1")
+    monkeypatch.setenv("DEADLINE_S", "15")
+    monkeypatch.setenv("PAGE_MODEL", "vendor/model")
+    s = load_settings()
+    assert (s.reading_at_once, s.deadline_s, s.page_model) == (1, 15.0, "vendor/model")
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("MAX_DOCUMENTS", "0"), ("READING_AT_ONCE", "-1"), ("DEADLINE_S", "0"), ("PAGE_MODEL", "")],
+)
+def test_a_limit_out_of_range_stops_the_start_and_names_it(
+    name: str, value: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setenv(name, value)
+    assert f" {name} is not valid: " in refusal(capsys)
+
+
+def test_fewer_jobs_kept_than_documents_waiting_stops_the_start(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setenv("JOBS_KEPT", "5")
+    assert refusal(capsys) == (
+        "The API cannot start. JOBS_KEPT (5) must not be smaller than MAX_DOCUMENTS (10). "
+        "Settings are read from the environment and from a .env file. "
+        "Copy .env.example to .env, fill it in and start the server again; "
+        "with `fastapi dev`, stop it first with Ctrl+C."
     )

@@ -161,3 +161,75 @@ export function finishedText(job) {
   const n = job.result?.issues.length ?? 0;
   return `Reading finished: ${n ? plural(n, "issue") : "everything adds up"}.`;
 }
+
+// ------------------------------------------------------------------ where things are on the page
+// A rectangle from the API is [x0, y0, x1, y1] in points of the page as displayed, origin
+// top-left. It is placed in percent of the page box, so it stays on its value at any size.
+// `sizes[page - 1]` is the page's [width, height] as the viewer measured it (PDF.js at
+// scale 1); a photo has no rectangles at all.
+
+const isRect = (r) => Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > r[0] && r[3] > r[1];
+
+/** The page entry of the result, or undefined. */
+const pageOf = (result, page) => (Array.isArray(result.pages) ? result.pages.find((p) => p.page === page) : undefined);
+
+/**
+ * Whether rectangles may be drawn on `page`: the API gave the page's size, and the page
+ * the viewer shows has the same shape (aspect ratios within 0.5 %). Otherwise a frame
+ * could land on the wrong value, and the page alone is shown.
+ */
+export function framesAllowed(result, page, sizes) {
+  const info = pageOf(result, page);
+  const size = sizes?.[page - 1];
+  if (!info || !(info.width > 0) || !(info.height > 0) || !size || !(size[0] > 0) || !(size[1] > 0)) return false;
+  return Math.abs(size[0] / size[1] / (info.width / info.height) - 1) < 0.005;
+}
+
+/** A rectangle in percent of its page: {left, top, width, height}. */
+export function percentBox(rect, result, page) {
+  const { width, height } = pageOf(result, page);
+  return {
+    left: (rect[0] / width) * 100,
+    top: (rect[1] / height) * 100,
+    width: ((rect[2] - rect[0]) / width) * 100,
+    height: ((rect[3] - rect[1]) / height) * 100,
+  };
+}
+
+/**
+ * Where an issue points: {page, frames: [percent box of each value in doubt], band:
+ * percent box of its row or null}, or null when it points nowhere. A line's values
+ * framed where the API located them; else the line's row; else its page only. An issue
+ * without a line, or of the header: its page, if it has one.
+ */
+export function target(issue, result, sizes) {
+  const line = issue.line_index != null ? result.lines[issue.line_index] : null;
+  const fields = (issue.fields ?? []).filter((f) => f.startsWith("line."));
+  const page = line?.page ?? issue.page;
+  if (page == null) return null;
+  if (!line || !framesAllowed(result, page, sizes) || !line.boxes) return { page, frames: [], band: null };
+  const boxes = line.boxes;
+  const frames = fields.map((f) => boxes[f.slice(5)]).filter(isRect).map((r) => percentBox(r, result, page));
+  const band = !frames.length && isRect(boxes.row) ? percentBox(boxes.row, result, page) : null;
+  return { page, frames, band };
+}
+
+/** The row of a line in percent of its page, or null where it cannot be placed. */
+export function rowBox(line, result, sizes) {
+  if (line.page == null || !isRect(line.boxes?.row) || !framesAllowed(result, line.page, sizes)) return null;
+  return percentBox(line.boxes.row, result, line.page);
+}
+
+/**
+ * The line shown at a point of the document: the last line of `page` whose row starts
+ * above `top` (percent of the page height); the page's first line when none can be
+ * placed; null for a page without lines.
+ */
+export function lineAt(result, page, top, sizes) {
+  const lines = result.lines.filter((l) => l.page === page);
+  const above = lines.filter((l) => {
+    const box = rowBox(l, result, sizes);
+    return box && box.top <= top;
+  });
+  return above.at(-1) ?? lines[0] ?? null;
+}

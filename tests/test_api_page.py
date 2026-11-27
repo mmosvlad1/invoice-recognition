@@ -205,3 +205,13 @@ def test_the_samples_say_what_they_are() -> None:
     ) in page
     for label in ("Scan (simulated)", "Photo (simulated)", "one misprinted amount"):
         assert label in page
+
+
+def test_the_viewer_loads_the_vendored_pdfjs() -> None:
+    viewer = (STATIC_DIR / "js" / "viewer.mjs").read_text()
+    folder = re.search(r'^const PDFJS = "/static/(vendor/[^"]+/)";$', viewer, re.MULTILINE)
+    assert folder is not None
+    for name in ("pdf.min.mjs", "pdf.worker.min.mjs"):
+        assert f"${{PDFJS}}{name}" in viewer
+        assert (STATIC_DIR / folder.group(1) / name).is_file()
+    assert "isEvalSupported: false" in viewer

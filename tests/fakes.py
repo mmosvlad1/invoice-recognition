@@ -7,7 +7,7 @@ import io
 import json
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
@@ -105,24 +105,19 @@ class Server:
         self.calls: Counter[int | str] = Counter()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        prompt = body["messages"][0]["content"][0]["text"]
+        kind = kind_of(request)
         answer: Answer | None
-        if prompt.startswith("You read ONE page"):
-            m = _PAGE_OF.search(prompt)
-            assert m is not None
-            page = int(m.group(1))
-            answers = self.pages[page]
-            answer = answers[min(self.calls[page], len(answers) - 1)]
-            self.calls[page] += 1
-        elif prompt.startswith("You are given the text layer"):
+        if isinstance(kind, int):
+            answers = self.pages[kind]
+            answer = answers[min(self.calls[kind], len(answers) - 1)]
+        elif kind == "layout":
             # The layout request carries no file.
-            assert [c["type"] for c in body["messages"][0]["content"]] == ["text"]
+            content = json.loads(request.content)["messages"][0]["content"]
+            assert [c["type"] for c in content] == ["text"]
             answer = self.layout
-            self.calls["layout"] += 1
         else:
             answer = self.header
-            self.calls["header"] += 1
+        self.calls[kind] += 1
         if isinstance(answer, BaseException):
             raise answer
         if isinstance(answer, httpx.Response):
@@ -135,7 +130,87 @@ class Server:
 
 _PAGE_OF = re.compile(r"page (\d+) of \d+")
 
+
+def kind_of(request: httpx.Request) -> int | str:
+    """Which request of the flow this is: "header", "layout", or the number of the page."""
+    prompt = json.loads(request.content)["messages"][0]["content"][0]["text"]
+    if prompt.startswith("You read ONE page"):
+        m = _PAGE_OF.search(prompt)
+        assert m is not None
+        return int(m.group(1))
+    if prompt.startswith("You are given the text layer"):
+        return "layout"
+    return "header"
+
+
 type Handler = Callable[[httpx.Request], httpx.Response]
+
+
+class SlowServer:
+    """A fake server that answers asynchronously, each request after its own sleep, and
+    counts the requests in flight. The answer itself comes from `server`.
+
+    sleeps: {kind: [seconds before answering the 1st request of that kind, the 2nd, ...]},
+    kind as kind_of() gives it; the last entry repeats. A kind not listed waits for no
+    time, but still lets the event loop run once, as a real connection would.
+
+    in_flight: requests in flight now, from their arrival until the client closes the
+    answer (it has read the stream to the end, or given up on it); most / pages_most: the
+    most at any time, of all requests / of page requests. A limit released before the
+    answer is read therefore shows here. arrived: the kind of every request, in order.
+    cancelled: the kinds of the requests the client gave up on while they were waited
+    for (the sleep was cancelled)."""
+
+    def __init__(
+        self, server: Handler, sleeps: Mapping[int | str, Sequence[float]] | None = None
+    ) -> None:
+        self.server, self.sleeps = server, dict(sleeps or {})
+        self.calls: Counter[int | str] = Counter()
+        self.arrived: list[int | str] = []
+        self.cancelled: list[int | str] = []
+        self.in_flight = self.most = self.pages_in_flight = self.pages_most = 0
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        kind = kind_of(request)
+        self.arrived.append(kind)
+        delays = self.sleeps.get(kind, [0.0])
+        delay = delays[min(self.calls[kind], len(delays) - 1)]
+        self.calls[kind] += 1
+        page = isinstance(kind, int)
+        self.in_flight += 1
+        self.pages_in_flight += page
+        self.most = max(self.most, self.in_flight)
+        self.pages_most = max(self.pages_most, self.pages_in_flight)
+
+        def done() -> None:
+            self.in_flight -= 1
+            self.pages_in_flight -= page
+
+        try:
+            await asyncio.sleep(delay)
+            answer = self.server(request)
+            body = await answer.aread()
+        except BaseException as e:
+            if isinstance(e, asyncio.CancelledError):
+                self.cancelled.append(kind)
+            done()
+            raise
+        return httpx.Response(answer.status_code, stream=_Closing(body, done))
+
+
+class _Closing(httpx.AsyncByteStream):
+    """An answer that calls `on_close` once, when the client closes it."""
+
+    def __init__(self, body: bytes, on_close: Callable[[], None]) -> None:
+        self.body, self.on_close, self.closed = body, on_close, False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.body
+
+    async def aclose(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self.on_close()
 
 
 def run(data: bytes, mime: str, server: Handler, cfg: Config | None = None) -> Result:

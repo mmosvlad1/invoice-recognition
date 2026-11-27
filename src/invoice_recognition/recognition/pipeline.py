@@ -148,6 +148,36 @@ def check_page(
     return issues
 
 
+@dataclass
+class Gate:
+    """What every model request of one process() call passes before it is sent.
+
+    slots: the limit on requests in flight shared by every document being read (None:
+    no shared limit). Each document also has its own limit (Config.concurrency) on its
+    page requests; that one is passed to enter() and leave() as `own`."""
+
+    slots: asyncio.Semaphore | None = None
+
+    async def enter(self, own: asyncio.Semaphore | None) -> None:
+        """Wait for the document's own limit, then for a shared slot: always in this
+        order, so that no two requests hold one each and wait for the other."""
+        held: list[asyncio.Semaphore] = []
+        try:
+            for sem in (own, self.slots):
+                if sem is not None:
+                    await sem.acquire()
+                    held.append(sem)
+        except BaseException:  # cancelled while waiting: give back what was taken
+            for sem in held:
+                sem.release()
+            raise
+
+    def leave(self, own: asyncio.Semaphore | None) -> None:
+        for sem in (self.slots, own):
+            if sem is not None:
+                sem.release()
+
+
 async def _call(
     client: httpx.AsyncClient,
     model: str,
@@ -155,9 +185,19 @@ async def _call(
     part: ContentPart | None,
     max_tokens: int,
     timeout_s: float,
+    *,
+    gate: Gate | None = None,
+    own: asyncio.Semaphore | None = None,
 ) -> LLMResult:
     """complete() that never raises: whatever goes wrong inside one request is
-    that request's error, not the document's. part=None: a text-only request."""
+    that request's error, not the document's. part=None: a text-only request.
+
+    Every wait before a request happens here: for `own`, the limit of the document on its
+    page requests (None for the header and the layout), and for a shared slot of the
+    gate."""
+    if gate is None:
+        gate = Gate()
+    await gate.enter(own)
     try:
         return await complete(
             client,
@@ -170,6 +210,8 @@ async def _call(
     except Exception as e:  # fault boundary: one request
         logger.warning("request to %s failed", model, exc_info=True)
         return LLMResult(model=model, error=f"{type(e).__name__}: {e}")
+    finally:
+        gate.leave(own)
 
 
 def _attempt(res: LLMResult, lines: int, issues: int) -> Attempt:
@@ -195,9 +237,12 @@ async def read_page(
     cfg: Config,
     sem: asyncio.Semaphore,
     carry: bool = False,
+    *,
+    gate: Gate | None = None,
 ) -> PageResult:
     """Read one page, once per entry of cfg.page_models until an attempt passes its
-    checks, and keep the best attempt.
+    checks, and keep the best attempt. sem: the document's limit on page requests in
+    flight; gate: the shared one (None: none).
 
     Issues of the returned page index its own lines (0-based within the page);
     process() shifts them to document positions.
@@ -211,8 +256,16 @@ async def read_page(
     counts: list[int] = []  # lines per attempt, for the attempts that were read cleanly
     prompt = co.carry_prompt(page, total) if carry else EXTRACT_PAGE.format(page=page, total=total)
     for model in cfg.page_models:
-        async with sem:
-            res = await _call(client, model, prompt, part, cfg.page_max_tokens, cfg.page_timeout_s)
+        res = await _call(
+            client,
+            model,
+            prompt,
+            part,
+            cfg.page_max_tokens,
+            cfg.page_timeout_s,
+            gate=gate,
+            own=sem,
+        )
         parsed = parse_json(res.text)
         rows = (parsed or {}).get("rows")
         tail = ""
@@ -307,10 +360,10 @@ HARMLESS_NOTES = ("unclassified_amount", "total_without_amount", "joined_across_
 
 
 async def ask_layout(
-    client: httpx.AsyncClient, prompt: str, cfg: Config
+    client: httpx.AsyncClient, prompt: str, cfg: Config, *, gate: Gate | None = None
 ) -> tuple[JSONObject | None, list[Attempt], str | None]:
     """One text-only request. Returns (answer, attempts, why it cannot be used)."""
-    res = await _call(client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90)
+    res = await _call(client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90, gate=gate)
     raw = None if res.error else parse_json(res.text)
     error = res.error or (
         None if raw is not None else f"answer is not valid JSON (finish={res.finish_reason})"
@@ -634,12 +687,12 @@ def _scan_quality(
 
 
 async def read_header(
-    client: httpx.AsyncClient, part: ContentPart, cfg: Config
+    client: httpx.AsyncClient, part: ContentPart, cfg: Config, *, gate: Gate | None = None
 ) -> tuple[Header, list[Attempt]]:
     attempts: list[Attempt] = []
     header: Header = {}
     for _ in range(2):
-        res = await _call(client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90)
+        res = await _call(client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate)
         header = parse_json(res.text) or {}
         attempts.append(_attempt(res, 0, 0 if header else 1))
         if header.get("total") is not None and header.get("supplier_name"):
@@ -788,6 +841,7 @@ async def process(
     on_page: Callable[[PageResult], None] | None = None,
     *,
     lane: Executor | None = None,
+    request_slots: asyncio.Semaphore | None = None,
 ) -> Result:
     """Read one invoice file. Never raises for a bad file or a bad answer: those end
     up in Result.issues and Result.status.
@@ -798,9 +852,14 @@ async def process(
     event loop stays free while a document is opened and measured. It must have one
     thread and be the only one that calls those libraries: pdfium must never be called
     from two threads at once. None: the work runs on the calling thread, never on the
-    loop's default executor (a pool of several threads)."""
+    loop's default executor (a pool of several threads).
+
+    request_slots limits the model requests in flight of every document that is given the
+    same semaphore; each document also keeps its own limit on page requests
+    (Config.concurrency). None: only that one."""
     cfg = cfg or Config()
     started = time.monotonic()
+    gate = Gate(request_slots)
     if lane is None:
         prep = prepare(data, mime, cfg)
     else:
@@ -824,7 +883,7 @@ async def process(
             quality=prep.quality,
             notes=notes,
         )
-    return await _read(prep, client, cfg, on_page, started)
+    return await _read(prep, client, cfg, on_page, started, gate)
 
 
 async def _read(
@@ -833,6 +892,7 @@ async def _read(
     cfg: Config,
     on_page: Callable[[PageResult], None] | None,
     started: float,
+    gate: Gate,
 ) -> Result:
     """Send the parts of a prepared file to the model, check what comes back and build the
     result. Pure Python on extracted text and model answers: no file is opened here."""
@@ -854,7 +914,7 @@ async def _read(
         else:
             try:
                 ask = carry if with_carry is None else with_carry
-                r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask)
+                r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask, gate=gate)
             except Exception as e:  # fault boundary: whatever breaks while reading one page
                 logger.warning("page %d could not be read", p, exc_info=True)
                 issue = Issue("page_read", f"{type(e).__name__}: {e}", page=p)
@@ -870,7 +930,7 @@ async def _read(
     notes: list[JSONObject] = list(scan_notes)
     if text_pages is None or evidence is None:
         first, *rest = await asyncio.gather(
-            read_header(client, header_part, cfg), *(one(p) for p in range(1, n + 1))
+            read_header(client, header_part, cfg, gate=gate), *(one(p) for p in range(1, n + 1))
         )
         header, header_attempts = cast(tuple[Header, list[Attempt]], first)
         pages = cast(list[PageResult], rest)
@@ -885,8 +945,8 @@ async def _read(
             return await one(wp, announce=False, with_carry=False) if cfg.layout_witness else None
 
         (header, header_attempts), (raw, layout_attempts, error), seen = await asyncio.gather(
-            read_header(client, header_part, cfg),
-            ask_layout(client, lay.layout_request(text_pages, wp), cfg),
+            read_header(client, header_part, cfg, gate=gate),
+            ask_layout(client, lay.layout_request(text_pages, wp), cfg, gate=gate),
             witness(),
         )
         by_code: dict[int, PageResult] | None = None

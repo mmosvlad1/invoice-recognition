@@ -11,8 +11,9 @@ from invoice_recognition.llm import ContentPart
 from invoice_recognition.recognition import photo
 from invoice_recognition.recognition.prompts import EXTRACT_PAGE
 
-from fakes import SHEET, Server, codes, header_for, jpeg, line, never, recording, run
-from fakes import photo as drawn
+from drawn import SHEET, jpeg
+from drawn import photo as drawn
+from fakes import Server, codes, header_for, line, never, recording, run
 
 
 def sent_image(part: ContentPart) -> Image.Image:

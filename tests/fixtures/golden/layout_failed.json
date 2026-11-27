@@ -1,0 +1,337 @@
+{
+ "name": "layout_failed",
+ "input_sha256": "c3dfee7a52d6d95b8b8c62ed7e1f5e77cf09ffe1e02eef750bc573f22a77a2fb",
+ "config": {},
+ "result": {
+  "status": "ok",
+  "header": {
+   "supplier_name": "Brightline Fasteners & Tools Ltd",
+   "supplier_tax_id": "GB318447291",
+   "invoice_number": "INV-2026-177889",
+   "invoice_date": "2026-10-28",
+   "due_date": "2026-11-11",
+   "po_number": "PO-37359",
+   "currency": "GBP",
+   "subtotal": 8450.46,
+   "tax_total": 1472.97,
+   "total": 9923.43,
+   "tax_breakdown": [
+    {
+     "rate": 20,
+     "base": 7183.14,
+     "tax": 1436.63
+    },
+    {
+     "rate": 7,
+     "base": 519.12,
+     "tax": 36.34
+    },
+    {
+     "rate": 0,
+     "base": 748.2,
+     "tax": 0
+    }
+   ]
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "DW-90472",
+    "description": "Drinking water 19L still",
+    "quantity": 84,
+    "unit": "case",
+    "unit_price": 6.18,
+    "tax_rate": 7,
+    "amount": 519.12,
+    "page": 1
+   },
+   {
+    "line_no": 2,
+    "sku": "HN-88045",
+    "description": "Hex nut M12 DIN 934 A2",
+    "quantity": 700,
+    "unit": "pcs",
+    "unit_price": 0.31,
+    "tax_rate": 20,
+    "amount": 217,
+    "page": 1
+   },
+   {
+    "line_no": 3,
+    "sku": "WP-41711",
+    "description": "Wall paint 2.5L RAL 9005, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 13,
+    "unit": "can",
+    "unit_price": 10.52,
+    "tax_rate": 20,
+    "amount": 136.76,
+    "page": 1
+   },
+   {
+    "line_no": 4,
+    "sku": "WP-93924",
+    "description": "Wall paint 5L RAL 7016",
+    "quantity": 15,
+    "unit": "can",
+    "unit_price": 19.68,
+    "tax_rate": 20,
+    "amount": 295.2,
+    "page": 1
+   },
+   {
+    "line_no": 5,
+    "sku": "HB-20905",
+    "description": "Hex bolt M6x25 DIN 931 A2",
+    "quantity": 7700,
+    "unit": "pcs",
+    "unit_price": 0.5152,
+    "tax_rate": 20,
+    "amount": 3967.04,
+    "page": 1
+   },
+   {
+    "line_no": 6,
+    "sku": "SG-62481",
+    "description": "Safety gloves size 8 cut level 5",
+    "quantity": 65,
+    "unit": "pair",
+    "unit_price": 2.78,
+    "tax_rate": 20,
+    "amount": 180.7,
+    "page": 1
+   },
+   {
+    "line_no": 7,
+    "sku": "CP-37488",
+    "description": "Copper pipe 28mm EN 1057 R250",
+    "quantity": 2.1,
+    "unit": "m",
+    "unit_price": 17.38,
+    "tax_rate": 20,
+    "amount": 36.5,
+    "page": 1
+   },
+   {
+    "line_no": 8,
+    "sku": "HB-36016",
+    "description": "Hex bolt M10x40 DIN 931 A2",
+    "quantity": 5200,
+    "unit": "pcs",
+    "unit_price": 0.0839,
+    "tax_rate": 20,
+    "amount": 436.28,
+    "page": 1
+   },
+   {
+    "line_no": 9,
+    "sku": "CP-25465",
+    "description": "Copper pipe 22mm EN 1057 R250",
+    "quantity": 75,
+    "unit": "m",
+    "unit_price": 3.65,
+    "tax_rate": 20,
+    "amount": 273.75,
+    "page": 1
+   },
+   {
+    "line_no": 10,
+    "sku": "FR-34692",
+    "description": "Export freight pallet zone 1, customer part ref. see framework agreement, partial delivery",
+    "quantity": 5,
+    "unit": "shp",
+    "unit_price": 74.82,
+    "tax_rate": 0,
+    "amount": 374.1,
+    "page": 1
+   },
+   {
+    "line_no": 11,
+    "sku": "CT-37900",
+    "description": "Cable tie 200x3.6 natural",
+    "quantity": 112,
+    "unit": "pack",
+    "unit_price": 2.16,
+    "tax_rate": 20,
+    "amount": 241.92,
+    "page": 1
+   },
+   {
+    "line_no": 12,
+    "sku": "FR-34692",
+    "description": "Export freight pallet zone 1, customer part ref. see framework agreement, partial delivery",
+    "quantity": 5,
+    "unit": "shp",
+    "unit_price": 74.82,
+    "tax_rate": 0,
+    "amount": 374.1,
+    "page": 1
+   },
+   {
+    "line_no": 13,
+    "sku": "HB-15519",
+    "description": "Hex bolt M8x30 DIN 933 zinc",
+    "quantity": 900,
+    "unit": "pcs",
+    "unit_price": 0.6,
+    "tax_rate": 20,
+    "amount": 540,
+    "page": 1
+   },
+   {
+    "line_no": 14,
+    "sku": "CT-19620",
+    "description": "Cable tie 370x7.6 natural, batch certified acc. to EN 10204 3.1, delivered on euro pallet",
+    "quantity": 103,
+    "unit": "pack",
+    "unit_price": 8.33,
+    "tax_rate": 20,
+    "amount": 857.99,
+    "page": 1
+   }
+  ],
+  "checkpoints": [],
+  "issues": [],
+  "evidence_source": "text_layer",
+  "calls": 3,
+  "cost_usd": 0.002,
+  "cost_unknown_calls": 1,
+  "prompt_tokens": 200,
+  "completion_tokens": 100,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "model",
+  "layout": {
+   "status": "failed",
+   "reason": "HTTP 500: upstream error",
+   "witness_page": 1,
+   "pages_layout": 0,
+   "pages_model": 1
+  },
+  "notes": [],
+  "quality": {},
+  "layout_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "lines": 0,
+    "issues": 1,
+    "error": "HTTP 500: upstream error",
+    "cost_known": false
+   }
+  ],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 14,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 14,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "dd2cf89a6c014884a85442fc854952e9d2f30d8451a2637f51b9997d5bf72ff3"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 900,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You are given the text layer of one page of a supplier invoice as numbered text lines:",
+       "sha256": "532ad63a92ad8b3e80beb2c52a5cac7856f0d7c6f47a79831d19a8f3705bfba4"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 1. The other pages are read",
+       "sha256": "fd0b18f0204616966a720a4c4204c2da77dd5c50ef8bc37f9f53d85fa23a77db"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "dd2cf89a6c014884a85442fc854952e9d2f30d8451a2637f51b9997d5bf72ff3"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -15,9 +15,9 @@ from reportlab.pdfgen import canvas
 
 from invoice_recognition.recognition import quality as ql
 
-from fakes import PHOTO_H as H
-from fakes import PHOTO_W as W
-from fakes import scan, scanned, sheet
+from drawn import PHOTO_H as H
+from drawn import PHOTO_W as W
+from drawn import scan, scanned, sheet
 
 
 def judged(

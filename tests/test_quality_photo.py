@@ -16,9 +16,9 @@ from PIL import Image, ImageFilter
 from invoice_recognition.recognition import photo as ph
 from invoice_recognition.recognition import quality as ql
 
-from fakes import PHOTO_H as H
-from fakes import PHOTO_W as W
-from fakes import SHEET, photo
+from drawn import PHOTO_H as H
+from drawn import PHOTO_W as W
+from drawn import SHEET, photo
 
 
 def codes(img: Image.Image, lim: ql.Limits | None = None) -> dict[str, ql.Reason]:

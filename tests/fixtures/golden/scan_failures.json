@@ -1,0 +1,288 @@
+{
+ "name": "scan_failures",
+ "input_sha256": "dd85599e8ca950105458ffb243d61982bfd199ee851a203c74d6917ddd69a524",
+ "config": {},
+ "result": {
+  "status": "needs_review",
+  "header": {
+   "supplier_name": "ACME Ltd",
+   "invoice_number": "INV-1",
+   "currency": "EUR",
+   "subtotal": 40.0,
+   "tax_total": 8.0,
+   "total": 48.0
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "SKU-001",
+    "description": "Item 1",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 2
+   },
+   {
+    "line_no": 2,
+    "sku": "SKU-002",
+    "description": "Item 2",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 10.0,
+    "tax_rate": 20,
+    "amount": 20.0,
+    "page": 2
+   }
+  ],
+  "checkpoints": [],
+  "issues": [
+   {
+    "check": "page_read",
+    "message": "RuntimeError: stream blew up",
+    "line": null,
+    "page": 1,
+    "severity": "error"
+   }
+  ],
+  "evidence_source": null,
+  "calls": 5,
+  "cost_usd": 0.002,
+  "cost_unknown_calls": 3,
+  "prompt_tokens": 200,
+  "completion_tokens": 100,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "model",
+  "layout": {
+   "status": "off",
+   "reason": "no text layer",
+   "pages_layout": 0,
+   "pages_model": 2
+  },
+  "notes": [],
+  "quality": {},
+  "layout_attempts": [],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 0,
+    "repaired": 0,
+    "method": "model",
+    "issues": [
+     {
+      "check": "page_read",
+      "message": "RuntimeError: stream blew up",
+      "line": null,
+      "page": 1,
+      "severity": "error"
+     }
+    ],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "lines": 0,
+      "issues": 1,
+      "error": "RuntimeError: stream blew up",
+      "cost_known": false
+     },
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "lines": 0,
+      "issues": 1,
+      "error": "RuntimeError: stream blew up",
+      "cost_known": false
+     }
+    ]
+   },
+   {
+    "page": 2,
+    "lines": 2,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "lines": 0,
+      "issues": 1,
+      "error": "HTTP 500: upstream error",
+      "cost_known": false
+     },
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 2,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "a2abfdd4b84a221cfd3b9aa80f5796da19093b6a91cc2a2758041a14321897ef"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 2. The other pages are read",
+       "sha256": "6cf16bc13cf0619a62ca0e2ef8dfac5f409fda2d01e1598184d4f37c3f1b6640"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 2. The other pages are read",
+       "sha256": "6cf16bc13cf0619a62ca0e2ef8dfac5f409fda2d01e1598184d4f37c3f1b6640"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 2 of 2. The other pages are read",
+       "sha256": "b36bd518618ac9778ae88f90cad002b1b87c07de6005d241d727f9f16a97ff41"
+      },
+      {
+       "type": "file",
+       "filename": "page2.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 2 of 2. The other pages are read",
+       "sha256": "b36bd518618ac9778ae88f90cad002b1b87c07de6005d241d727f9f16a97ff41"
+      },
+      {
+       "type": "file",
+       "filename": "page2.pdf",
+       "sha256": "425c06a7ee49fea6501b0b10df13d0c2aad4870b3af57b7ffe836ae835ab641e"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

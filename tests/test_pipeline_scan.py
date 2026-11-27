@@ -26,24 +26,18 @@ from invoice_recognition.recognition.pdf import extract_pages, page_count
 from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject, Line
 
-from fakes import (
+from drawn import (
     PHOTO_H,
     PHOTO_W,
-    Answer,
-    Server,
-    header_for,
     jpeg,
-    line,
-    never,
     photo,
-    recording,
-    run,
     scan,
     scan_with_invisible_ocr,
     scan_with_ocr_text,
     scanned,
     sheet,
 )
+from fakes import Answer, Server, header_for, line, never, recording, run
 from samples import INVOICES, truth_doc
 
 

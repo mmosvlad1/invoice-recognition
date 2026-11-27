@@ -1,0 +1,1897 @@
+{
+ "name": "text_layer_carry",
+ "input_sha256": "bdcb43dbdd15dc874a7bf9b43f923cbc0e7e5060f83f437ca567d91e617e0911",
+ "config": {
+  "use_layout": false
+ },
+ "result": {
+  "status": "ok",
+  "header": {
+   "supplier_name": "Atlas Building Materials Inc.",
+   "supplier_tax_id": "84-3917265",
+   "invoice_number": "INV-2026-329260",
+   "invoice_date": "2026-10-09",
+   "due_date": "2026-11-08",
+   "po_number": "PO-97745",
+   "currency": "USD",
+   "subtotal": 143575.47,
+   "tax_total": 26724.7,
+   "total": 170300.17,
+   "tax_breakdown": [
+    {
+     "rate": 20,
+     "base": 130473.72,
+     "tax": 26094.74
+    },
+    {
+     "rate": 7,
+     "base": 8999.47,
+     "tax": 629.96
+    },
+    {
+     "rate": 0,
+     "base": 4102.28,
+     "tax": 0
+    }
+   ]
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "SG-46474",
+    "description": "Safety gloves size 9 nitrile",
+    "quantity": 348,
+    "unit": "pair",
+    "unit_price": 10.77,
+    "tax_rate": 20,
+    "amount": 3747.96,
+    "page": 1
+   },
+   {
+    "line_no": 2,
+    "sku": "HB-51606",
+    "description": "Hex bolt M8x30 DIN 931 A2",
+    "quantity": 6600,
+    "unit": "pcs",
+    "unit_price": 0.7935,
+    "tax_rate": 20,
+    "amount": 5237.1,
+    "page": 1
+   },
+   {
+    "line_no": 3,
+    "sku": "SV-35764",
+    "description": "On-site installation after hours per hour",
+    "quantity": 32.7,
+    "unit": "h",
+    "unit_price": 50.92,
+    "tax_rate": 20,
+    "amount": 1665.08,
+    "page": 1
+   },
+   {
+    "line_no": 4,
+    "sku": "FR-19067",
+    "description": "Export freight pallet zone 2",
+    "quantity": 6,
+    "unit": "shp",
+    "unit_price": 276.38,
+    "tax_rate": 0,
+    "amount": 1658.28,
+    "page": 1
+   },
+   {
+    "line_no": 5,
+    "sku": "HN-76331",
+    "description": "Hex nut M16 DIN 934 A2",
+    "quantity": 6700,
+    "unit": "pcs",
+    "unit_price": 0.24,
+    "tax_rate": 20,
+    "amount": 1608,
+    "page": 1
+   },
+   {
+    "line_no": 6,
+    "sku": "HB-72552",
+    "description": "Hex bolt M8x45 DIN 931 A2",
+    "quantity": 500,
+    "unit": "pcs",
+    "unit_price": 0.68,
+    "tax_rate": 20,
+    "amount": 340,
+    "page": 1
+   },
+   {
+    "line_no": 7,
+    "sku": "HB-17616",
+    "description": "Hex bolt M8x45 DIN 933 zinc, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 3000,
+    "unit": "pcs",
+    "unit_price": 0.49,
+    "tax_rate": 20,
+    "amount": 1470,
+    "page": 1
+   },
+   {
+    "line_no": 8,
+    "sku": "CP-32377",
+    "description": "Copper pipe 18mm EN 1057 R250",
+    "quantity": 63.9,
+    "unit": "m",
+    "unit_price": 8.48,
+    "tax_rate": 20,
+    "amount": 541.87,
+    "page": 1
+   },
+   {
+    "line_no": 9,
+    "sku": "TM-12518",
+    "description": "Technical manual vol. 3 DE",
+    "quantity": 12,
+    "unit": "pcs",
+    "unit_price": 20.33,
+    "tax_rate": 7,
+    "amount": 243.96,
+    "page": 1
+   },
+   {
+    "line_no": 10,
+    "sku": "CP-73557",
+    "description": "Copper pipe 28mm EN 1057 R250",
+    "quantity": 15.4,
+    "unit": "m",
+    "unit_price": 8.51,
+    "tax_rate": 20,
+    "amount": 131.05,
+    "page": 1
+   },
+   {
+    "line_no": 11,
+    "sku": "CP-73557",
+    "description": "Copper pipe 28mm EN 1057 R250",
+    "quantity": 15.4,
+    "unit": "m",
+    "unit_price": 8.51,
+    "tax_rate": 20,
+    "amount": 131.05,
+    "page": 1
+   },
+   {
+    "line_no": 12,
+    "sku": "FW-34023",
+    "description": "Flat washer M12 DIN 9021 A2",
+    "quantity": 6600,
+    "unit": "pcs",
+    "unit_price": 0.07,
+    "tax_rate": 20,
+    "amount": 462,
+    "page": 1
+   },
+   {
+    "line_no": 13,
+    "sku": "CP-49992",
+    "description": "Copper pipe 18mm EN 1057 R250",
+    "quantity": 175.2,
+    "unit": "m",
+    "unit_price": 4.23,
+    "tax_rate": 20,
+    "amount": 741.1,
+    "page": 1
+   },
+   {
+    "line_no": 14,
+    "sku": "SG-50872",
+    "description": "Safety gloves size 9 nitrile",
+    "quantity": 363,
+    "unit": "pair",
+    "unit_price": 7.18,
+    "tax_rate": 20,
+    "amount": 2606.34,
+    "page": 1
+   },
+   {
+    "line_no": 15,
+    "sku": "SV-39482",
+    "description": "On-site installation after hours per hour, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 39.2,
+    "unit": "h",
+    "unit_price": 73.52,
+    "tax_rate": 20,
+    "amount": 2881.98,
+    "page": 1
+   },
+   {
+    "line_no": 16,
+    "sku": "CP-39160",
+    "description": "Copper pipe 18mm EN 1057 R290, customer part ref. see framework agreement, partial delivery",
+    "quantity": 148.8,
+    "unit": "m",
+    "unit_price": 13.08,
+    "tax_rate": 20,
+    "amount": 1946.3,
+    "page": 1
+   },
+   {
+    "line_no": 17,
+    "sku": "DW-73300",
+    "description": "Drinking water 19L sparkling, customer part ref. see framework agreement, partial delivery",
+    "quantity": 33,
+    "unit": "case",
+    "unit_price": 7.76,
+    "tax_rate": 7,
+    "amount": 256.08,
+    "page": 1
+   },
+   {
+    "line_no": 18,
+    "sku": "CT-53089",
+    "description": "Cable tie 300x4.8 UV resistant, customer part ref. see framework agreement, partial delivery",
+    "quantity": 218,
+    "unit": "pack",
+    "unit_price": 1.61,
+    "tax_rate": 20,
+    "amount": 350.98,
+    "page": 1
+   },
+   {
+    "line_no": 19,
+    "sku": "FW-66861",
+    "description": "Flat washer M8 DIN 9021 A2",
+    "quantity": 5100,
+    "unit": "pcs",
+    "unit_price": 0.09,
+    "tax_rate": 20,
+    "amount": 459,
+    "page": 1
+   },
+   {
+    "line_no": 20,
+    "sku": "TM-82544",
+    "description": "Technical manual vol. 1 EN",
+    "quantity": 19,
+    "unit": "pcs",
+    "unit_price": 26.84,
+    "tax_rate": 7,
+    "amount": 509.96,
+    "page": 1
+   },
+   {
+    "line_no": 21,
+    "sku": "WP-72249",
+    "description": "Wall paint 10L RAL 7016",
+    "quantity": 36,
+    "unit": "can",
+    "unit_price": 15.76,
+    "tax_rate": 20,
+    "amount": 567.36,
+    "page": 1
+   },
+   {
+    "line_no": 22,
+    "sku": "CP-53090",
+    "description": "Copper pipe 22mm EN 1057 R250",
+    "quantity": 85.2,
+    "unit": "m",
+    "unit_price": 17.03,
+    "tax_rate": 20,
+    "amount": 1450.96,
+    "page": 1
+   },
+   {
+    "line_no": 23,
+    "sku": "CP-36745",
+    "description": "Copper pipe 15mm EN 1057 R250, customer part ref. see framework agreement, partial delivery",
+    "quantity": 55.7,
+    "unit": "m",
+    "unit_price": 15.12,
+    "tax_rate": 20,
+    "amount": 842.18,
+    "page": 1
+   },
+   {
+    "line_no": 24,
+    "sku": "HN-62426",
+    "description": "Hex nut M6 DIN 934 A2",
+    "quantity": 500,
+    "unit": "pcs",
+    "unit_price": 0.09,
+    "tax_rate": 20,
+    "amount": 45,
+    "page": 1
+   },
+   {
+    "line_no": 25,
+    "sku": "LP-44385",
+    "description": "LED panel 30x30 6500K, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 35,
+    "unit": "pcs",
+    "unit_price": 27.54,
+    "tax_rate": 20,
+    "amount": 963.9,
+    "page": 1
+   },
+   {
+    "line_no": 26,
+    "sku": "SG-10977",
+    "description": "Safety gloves size 11 cut level 5",
+    "quantity": 217,
+    "unit": "pair",
+    "unit_price": 14.19,
+    "tax_rate": 20,
+    "amount": 3079.23,
+    "page": 2
+   },
+   {
+    "line_no": 27,
+    "sku": "SG-47333",
+    "description": "Safety gloves size 7 cut level 5",
+    "quantity": 384,
+    "unit": "pair",
+    "unit_price": 2.32,
+    "tax_rate": 20,
+    "amount": 890.88,
+    "page": 2
+   },
+   {
+    "line_no": 28,
+    "sku": "HN-68004",
+    "description": "Hex nut M10 DIN 934 zinc",
+    "quantity": 4700,
+    "unit": "pcs",
+    "unit_price": 0.1791,
+    "tax_rate": 20,
+    "amount": 841.77,
+    "page": 2
+   },
+   {
+    "line_no": 29,
+    "sku": "CT-57916",
+    "description": "Cable tie 100x2.5 UV resistant",
+    "quantity": 128,
+    "unit": "pack",
+    "unit_price": 7.07,
+    "tax_rate": 20,
+    "amount": 904.96,
+    "page": 2
+   },
+   {
+    "line_no": 30,
+    "sku": "DW-79215",
+    "description": "Drinking water 19L still",
+    "quantity": 60,
+    "unit": "case",
+    "unit_price": 3.35,
+    "tax_rate": 7,
+    "amount": 201,
+    "page": 2
+   },
+   {
+    "line_no": 31,
+    "sku": "DW-80096",
+    "description": "Drinking water 19L still",
+    "quantity": 79,
+    "unit": "case",
+    "unit_price": 3.74,
+    "tax_rate": 7,
+    "amount": 295.46,
+    "page": 2
+   },
+   {
+    "line_no": 32,
+    "sku": "WP-29782",
+    "description": "Wall paint 5L RAL 7016, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 46,
+    "unit": "can",
+    "unit_price": 17.88,
+    "tax_rate": 20,
+    "amount": 822.48,
+    "page": 2
+   },
+   {
+    "line_no": 33,
+    "sku": "LP-26843",
+    "description": "LED panel 30x120 6500K",
+    "quantity": 52,
+    "unit": "pcs",
+    "unit_price": 68.03,
+    "tax_rate": 20,
+    "amount": 3537.56,
+    "page": 2
+   },
+   {
+    "line_no": 34,
+    "sku": "CT-26046",
+    "description": "Cable tie 370x7.6 natural",
+    "quantity": 167,
+    "unit": "pack",
+    "unit_price": 4.37,
+    "tax_rate": 20,
+    "amount": 729.79,
+    "page": 2
+   },
+   {
+    "line_no": 35,
+    "sku": "HN-19544",
+    "description": "Hex nut M12 DIN 934 zinc",
+    "quantity": 4900,
+    "unit": "pcs",
+    "unit_price": 0.0696,
+    "tax_rate": 20,
+    "amount": 341.04,
+    "page": 2
+   },
+   {
+    "line_no": 36,
+    "sku": "WP-60255",
+    "description": "Wall paint 5L RAL 9010",
+    "quantity": 20,
+    "unit": "can",
+    "unit_price": 56.69,
+    "tax_rate": 20,
+    "amount": 1133.8,
+    "page": 2
+   },
+   {
+    "line_no": 37,
+    "sku": "TM-41081",
+    "description": "Technical manual vol. 3 EN",
+    "quantity": 9,
+    "unit": "pcs",
+    "unit_price": 61.65,
+    "tax_rate": 7,
+    "amount": 554.85,
+    "page": 2
+   },
+   {
+    "line_no": 38,
+    "sku": "DW-63009",
+    "description": "Drinking water 1.5L x6 sparkling",
+    "quantity": 43,
+    "unit": "case",
+    "unit_price": 9.04,
+    "tax_rate": 7,
+    "amount": 388.72,
+    "page": 2
+   },
+   {
+    "line_no": 39,
+    "sku": "SV-62943",
+    "description": "On-site installation standard per hour, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 26.4,
+    "unit": "h",
+    "unit_price": 64.55,
+    "tax_rate": 20,
+    "amount": 1704.12,
+    "page": 2
+   },
+   {
+    "line_no": 40,
+    "sku": "CP-37915",
+    "description": "Copper pipe 22mm EN 1057 R290",
+    "quantity": 135.9,
+    "unit": "m",
+    "unit_price": 18.92,
+    "tax_rate": 20,
+    "amount": 2571.23,
+    "page": 2
+   },
+   {
+    "line_no": 41,
+    "sku": "SG-69711",
+    "description": "Safety gloves size 8 nitrile",
+    "quantity": 46,
+    "unit": "pair",
+    "unit_price": 12.51,
+    "tax_rate": 20,
+    "amount": 575.46,
+    "page": 2
+   },
+   {
+    "line_no": 42,
+    "sku": "SG-94710",
+    "description": "Safety gloves size 11 nitrile",
+    "quantity": 236,
+    "unit": "pair",
+    "unit_price": 8,
+    "tax_rate": 20,
+    "amount": 1888,
+    "page": 2
+   },
+   {
+    "line_no": 43,
+    "sku": "CT-53844",
+    "description": "Cable tie 370x7.6 natural",
+    "quantity": 129,
+    "unit": "pack",
+    "unit_price": 4.63,
+    "tax_rate": 20,
+    "amount": 597.27,
+    "page": 2
+   },
+   {
+    "line_no": 44,
+    "sku": "FR-74576",
+    "description": "Export freight pallet zone 2",
+    "quantity": 2,
+    "unit": "shp",
+    "unit_price": 289.95,
+    "tax_rate": 0,
+    "amount": 579.9,
+    "page": 2
+   },
+   {
+    "line_no": 45,
+    "sku": "CP-36745",
+    "description": "Copper pipe 15mm EN 1057 R250, customer part ref. see framework agreement, partial delivery",
+    "quantity": 55.7,
+    "unit": "m",
+    "unit_price": 15.12,
+    "tax_rate": 20,
+    "amount": 842.18,
+    "page": 2
+   },
+   {
+    "line_no": 46,
+    "sku": "SV-71887",
+    "description": "On-site installation after hours per hour",
+    "quantity": 2.2,
+    "unit": "h",
+    "unit_price": 56.65,
+    "tax_rate": 20,
+    "amount": 124.63,
+    "page": 2
+   },
+   {
+    "line_no": 47,
+    "sku": "FW-90281",
+    "description": "Flat washer M10 DIN 125 zinc, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 5000,
+    "unit": "pcs",
+    "unit_price": 0.0122,
+    "tax_rate": 20,
+    "amount": 61,
+    "page": 2
+   },
+   {
+    "line_no": 48,
+    "sku": "DW-94901",
+    "description": "Drinking water 1.5L x6 sparkling",
+    "quantity": 8,
+    "unit": "case",
+    "unit_price": 8.14,
+    "tax_rate": 7,
+    "amount": 65.12,
+    "page": 2
+   },
+   {
+    "line_no": 49,
+    "sku": "DW-56072",
+    "description": "Drinking water 1.5L x6 still",
+    "quantity": 82,
+    "unit": "case",
+    "unit_price": 4.61,
+    "tax_rate": 7,
+    "amount": 378.02,
+    "page": 2
+   },
+   {
+    "line_no": 50,
+    "sku": "CT-74616",
+    "description": "Cable tie 100x2.5 black",
+    "quantity": 89,
+    "unit": "pack",
+    "unit_price": 5.29,
+    "tax_rate": 20,
+    "amount": 470.81,
+    "page": 2
+   },
+   {
+    "line_no": 51,
+    "sku": "CT-29513",
+    "description": "Cable tie 100x2.5 UV resistant",
+    "quantity": 137,
+    "unit": "pack",
+    "unit_price": 2.13,
+    "tax_rate": 20,
+    "amount": 291.81,
+    "page": 2
+   },
+   {
+    "line_no": 52,
+    "sku": "HN-98672",
+    "description": "Hex nut M16 DIN 985 nyloc",
+    "quantity": 1800,
+    "unit": "pcs",
+    "unit_price": 0.1444,
+    "tax_rate": 20,
+    "amount": 259.92,
+    "page": 2
+   },
+   {
+    "line_no": 53,
+    "sku": "FW-28411",
+    "description": "Flat washer M8 DIN 9021 A2, batch certified acc. to EN 10204 3.1, delivered on euro pallet",
+    "quantity": 1700,
+    "unit": "pcs",
+    "unit_price": 0.0736,
+    "tax_rate": 20,
+    "amount": 125.12,
+    "page": 2
+   },
+   {
+    "line_no": 54,
+    "sku": "CP-60304",
+    "description": "Copper pipe 22mm EN 1057 R290",
+    "quantity": 79.9,
+    "unit": "m",
+    "unit_price": 12.52,
+    "tax_rate": 20,
+    "amount": 1000.35,
+    "page": 2
+   },
+   {
+    "line_no": 55,
+    "sku": "FR-74576",
+    "description": "Export freight pallet zone 2",
+    "quantity": 2,
+    "unit": "shp",
+    "unit_price": 289.95,
+    "tax_rate": 0,
+    "amount": 579.9,
+    "page": 2
+   },
+   {
+    "line_no": 56,
+    "sku": "SG-73863",
+    "description": "Safety gloves size 11 latex",
+    "quantity": 39,
+    "unit": "pair",
+    "unit_price": 13.57,
+    "tax_rate": 20,
+    "amount": 529.23,
+    "page": 2
+   },
+   {
+    "line_no": 57,
+    "sku": "SV-97306",
+    "description": "On-site installation after hours per hour",
+    "quantity": 34.8,
+    "unit": "h",
+    "unit_price": 53.77,
+    "tax_rate": 20,
+    "amount": 1871.2,
+    "page": 2
+   },
+   {
+    "line_no": 58,
+    "sku": "HN-48664",
+    "description": "Hex nut M10 DIN 985 nyloc, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 3300,
+    "unit": "pcs",
+    "unit_price": 0.33,
+    "tax_rate": 20,
+    "amount": 1089,
+    "page": 2
+   },
+   {
+    "line_no": 59,
+    "sku": "HN-85618",
+    "description": "Hex nut M6 DIN 934 A2",
+    "quantity": 4400,
+    "unit": "pcs",
+    "unit_price": 0.1506,
+    "tax_rate": 20,
+    "amount": 662.64,
+    "page": 2
+   },
+   {
+    "line_no": 60,
+    "sku": "DW-53438",
+    "description": "Drinking water 19L sparkling, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 32,
+    "unit": "case",
+    "unit_price": 7.89,
+    "tax_rate": 7,
+    "amount": 252.48,
+    "page": 2
+   },
+   {
+    "line_no": 61,
+    "sku": "SV-36868",
+    "description": "On-site installation after hours per hour",
+    "quantity": 25.2,
+    "unit": "h",
+    "unit_price": 92.06,
+    "tax_rate": 20,
+    "amount": 2319.91,
+    "page": 3
+   },
+   {
+    "line_no": 62,
+    "sku": "WP-16874",
+    "description": "Wall paint 2.5L RAL 7016",
+    "quantity": 40,
+    "unit": "can",
+    "unit_price": 61.35,
+    "tax_rate": 20,
+    "amount": 2454,
+    "page": 3
+   },
+   {
+    "line_no": 63,
+    "sku": "HN-66158",
+    "description": "Hex nut M8 DIN 934 zinc",
+    "quantity": 6000,
+    "unit": "pcs",
+    "unit_price": 0.31,
+    "tax_rate": 20,
+    "amount": 1860,
+    "page": 3
+   },
+   {
+    "line_no": 64,
+    "sku": "HB-52445",
+    "description": "Hex bolt M10x50 DIN 933 A4",
+    "quantity": 4500,
+    "unit": "pcs",
+    "unit_price": 0.04,
+    "tax_rate": 20,
+    "amount": 180,
+    "page": 3
+   },
+   {
+    "line_no": 65,
+    "sku": "SG-41286",
+    "description": "Safety gloves size 8 latex",
+    "quantity": 316,
+    "unit": "pair",
+    "unit_price": 10.22,
+    "tax_rate": 20,
+    "amount": 3229.52,
+    "page": 3
+   },
+   {
+    "line_no": 66,
+    "sku": "TM-76515",
+    "description": "Technical manual vol. 2 DE, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 15,
+    "unit": "pcs",
+    "unit_price": 59.32,
+    "tax_rate": 7,
+    "amount": 889.8,
+    "page": 3
+   },
+   {
+    "line_no": 67,
+    "sku": "WP-62286",
+    "description": "Wall paint 1L RAL 9010",
+    "quantity": 45,
+    "unit": "can",
+    "unit_price": 31.85,
+    "tax_rate": 20,
+    "amount": 1433.25,
+    "page": 3
+   },
+   {
+    "line_no": 68,
+    "sku": "CT-52877",
+    "description": "Cable tie 200x3.6 black",
+    "quantity": 124,
+    "unit": "pack",
+    "unit_price": 6.4,
+    "tax_rate": 20,
+    "amount": 793.6,
+    "page": 3
+   },
+   {
+    "line_no": 69,
+    "sku": "CT-68620",
+    "description": "Cable tie 370x7.6 UV resistant",
+    "quantity": 234,
+    "unit": "pack",
+    "unit_price": 7.3,
+    "tax_rate": 20,
+    "amount": 1708.2,
+    "page": 3
+   },
+   {
+    "line_no": 70,
+    "sku": "FW-43781",
+    "description": "Flat washer M6 DIN 125 zinc",
+    "quantity": 9700,
+    "unit": "pcs",
+    "unit_price": 0.0356,
+    "tax_rate": 20,
+    "amount": 345.32,
+    "page": 3
+   },
+   {
+    "line_no": 71,
+    "sku": "CP-77438",
+    "description": "Copper pipe 28mm EN 1057 R250",
+    "quantity": 135.3,
+    "unit": "m",
+    "unit_price": 18.22,
+    "tax_rate": 20,
+    "amount": 2465.17,
+    "page": 3
+   },
+   {
+    "line_no": 72,
+    "sku": "HN-37501",
+    "description": "Hex nut M6 DIN 934 A2, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 3800,
+    "unit": "pcs",
+    "unit_price": 0.2709,
+    "tax_rate": 20,
+    "amount": 1029.42,
+    "page": 3
+   },
+   {
+    "line_no": 73,
+    "sku": "FW-70265",
+    "description": "Flat washer M6 DIN 9021 A2",
+    "quantity": 10900,
+    "unit": "pcs",
+    "unit_price": 0.0931,
+    "tax_rate": 20,
+    "amount": 1014.79,
+    "page": 3
+   },
+   {
+    "line_no": 74,
+    "sku": "SG-13471",
+    "description": "Safety gloves size 11 cut level 5",
+    "quantity": 39,
+    "unit": "pair",
+    "unit_price": 13.06,
+    "tax_rate": 20,
+    "amount": 509.34,
+    "page": 3
+   },
+   {
+    "line_no": 75,
+    "sku": "TM-30393",
+    "description": "Technical manual vol. 1 DE",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 55.21,
+    "tax_rate": 7,
+    "amount": 110.42,
+    "page": 3
+   },
+   {
+    "line_no": 76,
+    "sku": "FW-74065",
+    "description": "Flat washer M10 DIN 125 zinc",
+    "quantity": 5400,
+    "unit": "pcs",
+    "unit_price": 0.11,
+    "tax_rate": 20,
+    "amount": 594,
+    "page": 3
+   },
+   {
+    "line_no": 77,
+    "sku": "WP-38300",
+    "description": "Wall paint 5L RAL 9005",
+    "quantity": 27,
+    "unit": "can",
+    "unit_price": 73.24,
+    "tax_rate": 20,
+    "amount": 1977.48,
+    "page": 3
+   },
+   {
+    "line_no": 78,
+    "sku": "TM-79277",
+    "description": "Technical manual vol. 2 DE",
+    "quantity": 2,
+    "unit": "pcs",
+    "unit_price": 32.27,
+    "tax_rate": 7,
+    "amount": 64.54,
+    "page": 3
+   },
+   {
+    "line_no": 79,
+    "sku": "FW-24947",
+    "description": "Flat washer M10 DIN 125 zinc, batch certified acc. to EN 10204 3.1, delivered on euro pallet",
+    "quantity": 9800,
+    "unit": "pcs",
+    "unit_price": 0.02,
+    "tax_rate": 20,
+    "amount": 196,
+    "page": 3
+   },
+   {
+    "line_no": 80,
+    "sku": "HN-67830",
+    "description": "Hex nut M10 DIN 934 zinc",
+    "quantity": 2300,
+    "unit": "pcs",
+    "unit_price": 0.12,
+    "tax_rate": 20,
+    "amount": 276,
+    "page": 3
+   },
+   {
+    "line_no": 81,
+    "sku": "WP-41250",
+    "description": "Wall paint 2.5L RAL 9005",
+    "quantity": 2,
+    "unit": "can",
+    "unit_price": 68.49,
+    "tax_rate": 20,
+    "amount": 136.98,
+    "page": 3
+   },
+   {
+    "line_no": 82,
+    "sku": "CT-48304",
+    "description": "Cable tie 100x2.5 natural",
+    "quantity": 156,
+    "unit": "pack",
+    "unit_price": 5.24,
+    "tax_rate": 20,
+    "amount": 817.44,
+    "page": 3
+   },
+   {
+    "line_no": 83,
+    "sku": "SG-46195",
+    "description": "Safety gloves size 10 nitrile",
+    "quantity": 145,
+    "unit": "pair",
+    "unit_price": 14.05,
+    "tax_rate": 20,
+    "amount": 2037.25,
+    "page": 3
+   },
+   {
+    "line_no": 84,
+    "sku": "FR-11190",
+    "description": "Export freight parcel zone 2",
+    "quantity": 6,
+    "unit": "shp",
+    "unit_price": 134.88,
+    "tax_rate": 0,
+    "amount": 809.28,
+    "page": 3
+   },
+   {
+    "line_no": 85,
+    "sku": "FW-93594",
+    "description": "Flat washer M12 DIN 9021 A2, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 10500,
+    "unit": "pcs",
+    "unit_price": 0.0199,
+    "tax_rate": 20,
+    "amount": 208.95,
+    "page": 3
+   },
+   {
+    "line_no": 86,
+    "sku": "CP-19223",
+    "description": "Copper pipe 22mm EN 1057 R290",
+    "quantity": 6.5,
+    "unit": "m",
+    "unit_price": 3.93,
+    "tax_rate": 20,
+    "amount": 25.55,
+    "page": 3
+   },
+   {
+    "line_no": 87,
+    "sku": "HB-38890",
+    "description": "Hex bolt M8x45 DIN 933 A4",
+    "quantity": 6700,
+    "unit": "pcs",
+    "unit_price": 0.771,
+    "tax_rate": 20,
+    "amount": 5165.7,
+    "page": 3
+   },
+   {
+    "line_no": 88,
+    "sku": "TM-79871",
+    "description": "Technical manual vol. 3 DE",
+    "quantity": 19,
+    "unit": "pcs",
+    "unit_price": 41.29,
+    "tax_rate": 7,
+    "amount": 784.51,
+    "page": 3
+   },
+   {
+    "line_no": 89,
+    "sku": "HB-82476",
+    "description": "Hex bolt M8x35 DIN 933 A4",
+    "quantity": 1900,
+    "unit": "pcs",
+    "unit_price": 0.5432,
+    "tax_rate": 20,
+    "amount": 1032.08,
+    "page": 3
+   },
+   {
+    "line_no": 90,
+    "sku": "SV-87920",
+    "description": "On-site installation after hours per hour",
+    "quantity": 4.5,
+    "unit": "h",
+    "unit_price": 62.79,
+    "tax_rate": 20,
+    "amount": 282.56,
+    "page": 3
+   },
+   {
+    "line_no": 91,
+    "sku": "CT-37726",
+    "description": "Cable tie 300x4.8 UV resistant",
+    "quantity": 192,
+    "unit": "pack",
+    "unit_price": 3.38,
+    "tax_rate": 20,
+    "amount": 648.96,
+    "page": 3
+   },
+   {
+    "line_no": 92,
+    "sku": "SG-85241",
+    "description": "Safety gloves size 10 nitrile",
+    "quantity": 352,
+    "unit": "pair",
+    "unit_price": 14.04,
+    "tax_rate": 20,
+    "amount": 4942.08,
+    "page": 3
+   },
+   {
+    "line_no": 93,
+    "sku": "SV-31857",
+    "description": "On-site installation after hours per hour",
+    "quantity": 23.2,
+    "unit": "h",
+    "unit_price": 62.08,
+    "tax_rate": 20,
+    "amount": 1440.26,
+    "page": 3
+   },
+   {
+    "line_no": 94,
+    "sku": "TM-36525",
+    "description": "Technical manual vol. 3 DE, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 7,
+    "unit": "pcs",
+    "unit_price": 22.24,
+    "tax_rate": 7,
+    "amount": 155.68,
+    "page": 3
+   },
+   {
+    "line_no": 95,
+    "sku": "SG-80594",
+    "description": "Safety gloves size 11 latex",
+    "quantity": 230,
+    "unit": "pair",
+    "unit_price": 1.9,
+    "tax_rate": 20,
+    "amount": 437,
+    "page": 3
+   },
+   {
+    "line_no": 96,
+    "sku": "FR-79611",
+    "description": "Export freight pallet zone 1, batch certified acc. to EN 10204 3.1, delivered on euro pallet",
+    "quantity": 4,
+    "unit": "shp",
+    "unit_price": 118.73,
+    "tax_rate": 0,
+    "amount": 474.92,
+    "page": 3
+   },
+   {
+    "line_no": 97,
+    "sku": "FW-93594",
+    "description": "Flat washer M12 DIN 9021 A2, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 10500,
+    "unit": "pcs",
+    "unit_price": 0.0199,
+    "tax_rate": 20,
+    "amount": 208.95,
+    "page": 4
+   },
+   {
+    "line_no": 98,
+    "sku": "TM-33763",
+    "description": "Technical manual vol. 1 EN, batch certified acc. to EN 10204 3.1, delivered on euro pallet",
+    "quantity": 7,
+    "unit": "pcs",
+    "unit_price": 46.2,
+    "tax_rate": 7,
+    "amount": 323.4,
+    "page": 4
+   },
+   {
+    "line_no": 99,
+    "sku": "TM-45095",
+    "description": "Technical manual vol. 3 EN",
+    "quantity": 4,
+    "unit": "pcs",
+    "unit_price": 52.26,
+    "tax_rate": 7,
+    "amount": 209.04,
+    "page": 4
+   },
+   {
+    "line_no": 100,
+    "sku": "SV-97237",
+    "description": "On-site installation standard per hour",
+    "quantity": 21.8,
+    "unit": "h",
+    "unit_price": 54.41,
+    "tax_rate": 20,
+    "amount": 1186.14,
+    "page": 4
+   },
+   {
+    "line_no": 101,
+    "sku": "DW-82136",
+    "description": "Drinking water 1.5L x6 still, customer part ref. see framework agreement, partial delivery",
+    "quantity": 84,
+    "unit": "case",
+    "unit_price": 8.74,
+    "tax_rate": 7,
+    "amount": 734.16,
+    "page": 4
+   },
+   {
+    "line_no": 102,
+    "sku": "LP-41667",
+    "description": "LED panel 30x120 6500K",
+    "quantity": 16,
+    "unit": "pcs",
+    "unit_price": 50.96,
+    "tax_rate": 20,
+    "amount": 815.36,
+    "page": 4
+   },
+   {
+    "line_no": 103,
+    "sku": "LP-54468",
+    "description": "LED panel 30x120 3000K",
+    "quantity": 35,
+    "unit": "pcs",
+    "unit_price": 42.9,
+    "tax_rate": 20,
+    "amount": 1501.5,
+    "page": 4
+   },
+   {
+    "line_no": 104,
+    "sku": "HB-70940",
+    "description": "Hex bolt M8x30 DIN 931 A2",
+    "quantity": 2500,
+    "unit": "pcs",
+    "unit_price": 0.815,
+    "tax_rate": 20,
+    "amount": 2037.5,
+    "page": 4
+   },
+   {
+    "line_no": 105,
+    "sku": "DW-91007",
+    "description": "Drinking water 1.5L x6 sparkling",
+    "quantity": 8,
+    "unit": "case",
+    "unit_price": 3.86,
+    "tax_rate": 7,
+    "amount": 30.88,
+    "page": 4
+   },
+   {
+    "line_no": 106,
+    "sku": "TM-16573",
+    "description": "Technical manual vol. 2 DE",
+    "quantity": 16,
+    "unit": "pcs",
+    "unit_price": 33,
+    "tax_rate": 7,
+    "amount": 528,
+    "page": 4
+   },
+   {
+    "line_no": 107,
+    "sku": "CT-18032",
+    "description": "Cable tie 200x3.6 black, customer part ref. see framework agreement, partial delivery",
+    "quantity": 179,
+    "unit": "pack",
+    "unit_price": 3.87,
+    "tax_rate": 20,
+    "amount": 692.73,
+    "page": 4
+   },
+   {
+    "line_no": 108,
+    "sku": "DW-64463",
+    "description": "Drinking water 0.5L x24 sparkling",
+    "quantity": 48,
+    "unit": "case",
+    "unit_price": 8.99,
+    "tax_rate": 7,
+    "amount": 431.52,
+    "page": 4
+   },
+   {
+    "line_no": 109,
+    "sku": "SV-41265",
+    "description": "On-site installation standard per hour",
+    "quantity": 14.7,
+    "unit": "h",
+    "unit_price": 67.77,
+    "tax_rate": 20,
+    "amount": 996.22,
+    "page": 4
+   },
+   {
+    "line_no": 110,
+    "sku": "FW-85340",
+    "description": "Flat washer M12 DIN 9021 A2, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 1100,
+    "unit": "pcs",
+    "unit_price": 0.08,
+    "tax_rate": 20,
+    "amount": 88,
+    "page": 4
+   },
+   {
+    "line_no": 111,
+    "sku": "DW-56510",
+    "description": "Drinking water 1.5L x6 still",
+    "quantity": 51,
+    "unit": "case",
+    "unit_price": 6.78,
+    "tax_rate": 7,
+    "amount": 345.78,
+    "page": 4
+   },
+   {
+    "line_no": 112,
+    "sku": "HB-99112",
+    "description": "Hex bolt M6x20 DIN 931 A2",
+    "quantity": 7500,
+    "unit": "pcs",
+    "unit_price": 0.04,
+    "tax_rate": 20,
+    "amount": 300,
+    "page": 4
+   },
+   {
+    "line_no": 113,
+    "sku": "FW-42506",
+    "description": "Flat washer M6 DIN 125 zinc",
+    "quantity": 10100,
+    "unit": "pcs",
+    "unit_price": 0.05,
+    "tax_rate": 20,
+    "amount": 505,
+    "page": 4
+   },
+   {
+    "line_no": 114,
+    "sku": "HN-21828",
+    "description": "Hex nut M8 DIN 934 zinc, box of 100, RoHS compliant, country of origin DE",
+    "quantity": 9500,
+    "unit": "pcs",
+    "unit_price": 0.21,
+    "tax_rate": 20,
+    "amount": 1995,
+    "page": 4
+   },
+   {
+    "line_no": 115,
+    "sku": "CT-88772",
+    "description": "Cable tie 300x4.8 UV resistant",
+    "quantity": 127,
+    "unit": "pack",
+    "unit_price": 9.51,
+    "tax_rate": 20,
+    "amount": 1207.77,
+    "page": 4
+   },
+   {
+    "line_no": 116,
+    "sku": "FW-39919",
+    "description": "Flat washer M8 DIN 9021 A2",
+    "quantity": 5700,
+    "unit": "pcs",
+    "unit_price": 0.09,
+    "tax_rate": 20,
+    "amount": 513,
+    "page": 4
+   },
+   {
+    "line_no": 117,
+    "sku": "CT-96808",
+    "description": "Cable tie 300x4.8 UV resistant",
+    "quantity": 148,
+    "unit": "pack",
+    "unit_price": 6.63,
+    "tax_rate": 20,
+    "amount": 981.24,
+    "page": 4
+   },
+   {
+    "line_no": 118,
+    "sku": "DW-69829",
+    "description": "Drinking water 19L still",
+    "quantity": 58,
+    "unit": "case",
+    "unit_price": 3.69,
+    "tax_rate": 7,
+    "amount": 214.02,
+    "page": 4
+   },
+   {
+    "line_no": 119,
+    "sku": "LP-32440",
+    "description": "LED panel 30x30 6500K",
+    "quantity": 26,
+    "unit": "pcs",
+    "unit_price": 21.2,
+    "tax_rate": 20,
+    "amount": 551.2,
+    "page": 4
+   },
+   {
+    "line_no": 120,
+    "sku": "TM-30706",
+    "description": "Technical manual vol. 3 DE",
+    "quantity": 7,
+    "unit": "pcs",
+    "unit_price": 49.13,
+    "tax_rate": 7,
+    "amount": 343.91,
+    "page": 4
+   },
+   {
+    "line_no": 121,
+    "sku": "HB-58815",
+    "description": "Hex bolt M8x45 DIN 933 zinc",
+    "quantity": 1300,
+    "unit": "pcs",
+    "unit_price": 0.71,
+    "tax_rate": 20,
+    "amount": 923,
+    "page": 4
+   },
+   {
+    "line_no": 122,
+    "sku": "HB-44184",
+    "description": "Hex bolt M8x35 DIN 931 A2",
+    "quantity": 5300,
+    "unit": "pcs",
+    "unit_price": 0.05,
+    "tax_rate": 20,
+    "amount": 265,
+    "page": 4
+   },
+   {
+    "line_no": 123,
+    "sku": "CP-78191",
+    "description": "Copper pipe 18mm EN 1057 R250",
+    "quantity": 105.4,
+    "unit": "m",
+    "unit_price": 16.72,
+    "tax_rate": 20,
+    "amount": 1762.29,
+    "page": 4
+   },
+   {
+    "line_no": 124,
+    "sku": "SG-15667",
+    "description": "Safety gloves size 10 latex",
+    "quantity": 264,
+    "unit": "pair",
+    "unit_price": 2.63,
+    "tax_rate": 20,
+    "amount": 694.32,
+    "page": 4
+   },
+   {
+    "line_no": 125,
+    "sku": "HB-50185",
+    "description": "Hex bolt M6x25 DIN 931 A2",
+    "quantity": 5400,
+    "unit": "pcs",
+    "unit_price": 0.8757,
+    "tax_rate": 20,
+    "amount": 4728.78,
+    "page": 4
+   },
+   {
+    "line_no": 126,
+    "sku": "DW-44018",
+    "description": "Drinking water 1.5L x6 still",
+    "quantity": 59,
+    "unit": "case",
+    "unit_price": 6.26,
+    "tax_rate": 7,
+    "amount": 369.34,
+    "page": 4
+   },
+   {
+    "line_no": 127,
+    "sku": "SG-50406",
+    "description": "Safety gloves size 9 latex",
+    "quantity": 11,
+    "unit": "pair",
+    "unit_price": 11.67,
+    "tax_rate": 20,
+    "amount": 128.37,
+    "page": 4
+   },
+   {
+    "line_no": 128,
+    "sku": "LP-39098",
+    "description": "LED panel 30x120 3000K",
+    "quantity": 33,
+    "unit": "pcs",
+    "unit_price": 67.71,
+    "tax_rate": 20,
+    "amount": 2234.43,
+    "page": 4
+   },
+   {
+    "line_no": 129,
+    "sku": "DW-21013",
+    "description": "Drinking water 1.5L x6 still",
+    "quantity": 14,
+    "unit": "case",
+    "unit_price": 8.77,
+    "tax_rate": 7,
+    "amount": 122.78,
+    "page": 4
+   },
+   {
+    "line_no": 130,
+    "sku": "SV-36357",
+    "description": "On-site installation standard per hour",
+    "quantity": 27.6,
+    "unit": "h",
+    "unit_price": 67.84,
+    "tax_rate": 20,
+    "amount": 1872.38,
+    "page": 4
+   },
+   {
+    "line_no": 131,
+    "sku": "CT-61279",
+    "description": "Cable tie 370x7.6 UV resistant, customer part ref. see framework agreement, partial delivery",
+    "quantity": 220,
+    "unit": "pack",
+    "unit_price": 2,
+    "tax_rate": 20,
+    "amount": 440,
+    "page": 4
+   },
+   {
+    "line_no": 132,
+    "sku": "HB-44184",
+    "description": "Hex bolt M8x35 DIN 931 A2",
+    "quantity": 5300,
+    "unit": "pcs",
+    "unit_price": 0.05,
+    "tax_rate": 20,
+    "amount": 265,
+    "page": 5
+   },
+   {
+    "line_no": 133,
+    "sku": "DW-49165",
+    "description": "Drinking water 1.5L x6 sparkling",
+    "quantity": 52,
+    "unit": "case",
+    "unit_price": 3.77,
+    "tax_rate": 7,
+    "amount": 196.04,
+    "page": 5
+   },
+   {
+    "line_no": 134,
+    "sku": "HB-16965",
+    "description": "Hex bolt M8x35 DIN 933 zinc",
+    "quantity": 6500,
+    "unit": "pcs",
+    "unit_price": 0.5,
+    "tax_rate": 20,
+    "amount": 3250,
+    "page": 5
+   },
+   {
+    "line_no": 135,
+    "sku": "LP-62070",
+    "description": "LED panel 62x62 4000K",
+    "quantity": 18,
+    "unit": "pcs",
+    "unit_price": 28.26,
+    "tax_rate": 20,
+    "amount": 508.68,
+    "page": 5
+   },
+   {
+    "line_no": 136,
+    "sku": "LP-85607",
+    "description": "LED panel 60x60 6500K",
+    "quantity": 53,
+    "unit": "pcs",
+    "unit_price": 58.33,
+    "tax_rate": 20,
+    "amount": 3091.49,
+    "page": 5
+   },
+   {
+    "line_no": 137,
+    "sku": "SV-72258",
+    "description": "On-site installation after hours per hour",
+    "quantity": 8.9,
+    "unit": "h",
+    "unit_price": 69.61,
+    "tax_rate": 20,
+    "amount": 619.53,
+    "page": 5
+   },
+   {
+    "line_no": 138,
+    "sku": "SV-53013",
+    "description": "On-site installation standard per hour",
+    "quantity": 23.1,
+    "unit": "h",
+    "unit_price": 61.27,
+    "tax_rate": 20,
+    "amount": 1415.34,
+    "page": 5
+   }
+  ],
+  "checkpoints": [],
+  "issues": [],
+  "evidence_source": "text_layer",
+  "calls": 6,
+  "cost_usd": 0.006,
+  "cost_unknown_calls": 0,
+  "prompt_tokens": 600,
+  "completion_tokens": 300,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "model",
+  "layout": {
+   "status": "off",
+   "reason": "disabled",
+   "pages_layout": 0,
+   "pages_model": 5
+  },
+  "notes": [
+   {
+    "page": 2,
+    "kind": "joined_across_pages",
+    "text": "country of origin DE",
+    "source": "carry_in",
+    "to_page": 1,
+    "line": 24,
+    "line_no": 25,
+    "sku": "LP-44385"
+   },
+   {
+    "page": 3,
+    "kind": "joined_across_pages",
+    "text": "5 year manufacturer warranty",
+    "source": "carry_in",
+    "to_page": 2,
+    "line": 59,
+    "line_no": 60,
+    "sku": "DW-53438"
+   },
+   {
+    "page": 4,
+    "kind": "joined_across_pages",
+    "text": "delivered on euro pallet",
+    "source": "carry_in",
+    "to_page": 3,
+    "line": 95,
+    "line_no": 96,
+    "sku": "FR-79611"
+   },
+   {
+    "page": 5,
+    "kind": "joined_across_pages",
+    "text": "framework agreement, partial delivery",
+    "source": "carry_in",
+    "to_page": 4,
+    "line": 130,
+    "line_no": 131,
+    "sku": "CT-61279"
+   }
+  ],
+  "quality": {},
+  "layout_attempts": [],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 25,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 25,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 2,
+    "lines": 35,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 35,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 3,
+    "lines": 36,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 36,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 4,
+    "lines": 35,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 35,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   },
+   {
+    "page": 5,
+    "lines": 7,
+    "repaired": 0,
+    "method": "model",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 7,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "8be948853129df0ba9a759d55ab04b99be7e8b9510c8f063c56430d7ad8a437e"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 5. The other pages are read",
+       "sha256": "d1068d13e77d9cdfb23d3ecb4849ba82e50eaf001e10b3de51f07b6149b32008"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "8dba2659bc0a270d8e8bf966f61b352cea457f915f6bb504fc3947ea82897cbf"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 2 of 5. The other pages are read",
+       "sha256": "3260f8cbddcafe3ffa7db09db0253a2d3d51d93e5a33b4695c61345cc5fc1dba"
+      },
+      {
+       "type": "file",
+       "filename": "page2.pdf",
+       "sha256": "68d0d2f40c2f138d677293cf0cad007750387d2af69b6bacc3bd7e52c5aa0291"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 3 of 5. The other pages are read",
+       "sha256": "d06769d940d5bac623b4eded44836b059285d0f92d56b1fb5d97ac03fa976f5f"
+      },
+      {
+       "type": "file",
+       "filename": "page3.pdf",
+       "sha256": "628373a7a2858bff7aca83f730a3c502ee9d4923ff6e386090617420d019c661"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 4 of 5. The other pages are read",
+       "sha256": "9a272cf3c5fee68745ac7923ac1a980e36de264df32775c03c19997caac315a1"
+      },
+      {
+       "type": "file",
+       "filename": "page4.pdf",
+       "sha256": "3f10398d84f8f04c4602259966caddf7a7e3b8393b2ce2b9f2389c65b99fee74"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 5 of 5. The other pages are read",
+       "sha256": "a7125501fc1ede6a8c642079a616b0dab999cc1bb2be32346a969af72ae10878"
+      },
+      {
+       "type": "file",
+       "filename": "page5.pdf",
+       "sha256": "51f9e0953430e9b1d58a0522e9b9c41d4ba2be51db26711e59bb80ebaa57d84e"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

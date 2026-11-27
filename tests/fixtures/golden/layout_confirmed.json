@@ -1,0 +1,471 @@
+{
+ "name": "layout_confirmed",
+ "input_sha256": "f73a053990e901935ec905f25354390dbde9d5b8df64aa1ac514fd5e8dfaaaae",
+ "config": {},
+ "result": {
+  "status": "ok",
+  "header": {
+   "supplier_name": "Brightline Fasteners & Tools Ltd",
+   "supplier_tax_id": "GB318447291",
+   "invoice_number": "INV-2026-477813",
+   "invoice_date": "2026-11-07",
+   "due_date": "2026-12-07",
+   "po_number": "PO-46659",
+   "currency": "GBP",
+   "subtotal": 25566.95,
+   "tax_total": 4443.09,
+   "total": 30010.04,
+   "tax_breakdown": [
+    {
+     "rate": 20,
+     "base": 21315.59,
+     "tax": 4263.12
+    },
+    {
+     "rate": 7,
+     "base": 2571.04,
+     "tax": 179.97
+    },
+    {
+     "rate": 0,
+     "base": 1680.32,
+     "tax": 0
+    }
+   ]
+  },
+  "lines": [
+   {
+    "line_no": 1,
+    "sku": "SV-94332",
+    "description": "On-site installation after hours per hour",
+    "quantity": 19.8,
+    "unit": "h",
+    "unit_price": 94.84,
+    "tax_rate": 20,
+    "amount": 1877.83,
+    "page": 1
+   },
+   {
+    "line_no": 2,
+    "sku": "FR-31268",
+    "description": "Export freight pallet zone 3, incl. mounting kit and driver, 5 year manufacturer warranty",
+    "quantity": 3,
+    "unit": "shp",
+    "unit_price": 303.72,
+    "tax_rate": 0,
+    "amount": 911.16,
+    "page": 1
+   },
+   {
+    "line_no": 3,
+    "sku": "CT-54171",
+    "description": "Cable tie 100x2.5 UV resistant",
+    "quantity": 180,
+    "unit": "pack",
+    "unit_price": 1.8,
+    "tax_rate": 20,
+    "amount": 324,
+    "page": 1
+   },
+   {
+    "line_no": 4,
+    "sku": "HN-68162",
+    "description": "Hex nut M6 DIN 934 zinc",
+    "quantity": 7000,
+    "unit": "pcs",
+    "unit_price": 0.09,
+    "tax_rate": 20,
+    "amount": 630,
+    "page": 1
+   },
+   {
+    "line_no": 5,
+    "sku": "LP-16730",
+    "description": "LED panel 60x60 6500K",
+    "quantity": 11,
+    "unit": "pcs",
+    "unit_price": 58.74,
+    "tax_rate": 20,
+    "amount": 646.14,
+    "page": 1
+   },
+   {
+    "line_no": 6,
+    "sku": "DW-72490",
+    "description": "Drinking water 0.5L x24 sparkling",
+    "quantity": 64,
+    "unit": "case",
+    "unit_price": 7.21,
+    "tax_rate": 7,
+    "amount": 461.44,
+    "page": 1
+   },
+   {
+    "line_no": 7,
+    "sku": "DW-44283",
+    "description": "Drinking water 0.5L x24 still",
+    "quantity": 88,
+    "unit": "case",
+    "unit_price": 9.24,
+    "tax_rate": 7,
+    "amount": 813.12,
+    "page": 1
+   },
+   {
+    "line_no": 8,
+    "sku": "SG-57621",
+    "description": "Safety gloves size 10 cut level 5",
+    "quantity": 181,
+    "unit": "pair",
+    "unit_price": 5.08,
+    "tax_rate": 20,
+    "amount": 919.48,
+    "page": 1
+   },
+   {
+    "line_no": 9,
+    "sku": "TM-39119",
+    "description": "Technical manual vol. 3 EN, customer part ref. see framework agreement, partial delivery",
+    "quantity": 1,
+    "unit": "pcs",
+    "unit_price": 19.5,
+    "tax_rate": 7,
+    "amount": 19.5,
+    "page": 1
+   },
+   {
+    "line_no": 10,
+    "sku": "HB-20221",
+    "description": "Hex bolt M8x45 DIN 933 zinc",
+    "quantity": 1500,
+    "unit": "pcs",
+    "unit_price": 0.5141,
+    "tax_rate": 20,
+    "amount": 771.15,
+    "page": 1
+   },
+   {
+    "line_no": 11,
+    "sku": "HB-70196",
+    "description": "Hex bolt M8x45 DIN 931 A2",
+    "quantity": 4300,
+    "unit": "pcs",
+    "unit_price": 0.67,
+    "tax_rate": 20,
+    "amount": 2881,
+    "page": 1
+   },
+   {
+    "line_no": 12,
+    "sku": "SG-41445",
+    "description": "Safety gloves size 9 latex",
+    "quantity": 256,
+    "unit": "pair",
+    "unit_price": 13.98,
+    "tax_rate": 20,
+    "amount": 3578.88,
+    "page": 1
+   },
+   {
+    "line_no": 13,
+    "sku": "FW-10874",
+    "description": "Flat washer M12 DIN 9021 A2",
+    "quantity": 10100,
+    "unit": "pcs",
+    "unit_price": 0.03,
+    "tax_rate": 20,
+    "amount": 303,
+    "page": 1
+   },
+   {
+    "line_no": 14,
+    "sku": "SG-91143",
+    "description": "Safety gloves size 8 nitrile",
+    "quantity": 136,
+    "unit": "pair",
+    "unit_price": 8.22,
+    "tax_rate": 20,
+    "amount": 1117.92,
+    "page": 1
+   },
+   {
+    "line_no": 15,
+    "sku": "SG-46626",
+    "description": "Safety gloves size 11 cut level 5",
+    "quantity": 352,
+    "unit": "pair",
+    "unit_price": 13.59,
+    "tax_rate": 20,
+    "amount": 4783.68,
+    "page": 1
+   },
+   {
+    "line_no": 16,
+    "sku": "CT-31253",
+    "description": "Cable tie 370x7.6 natural",
+    "quantity": 118,
+    "unit": "pack",
+    "unit_price": 3.42,
+    "tax_rate": 20,
+    "amount": 403.56,
+    "page": 1
+   },
+   {
+    "line_no": 17,
+    "sku": "TM-38058",
+    "description": "Technical manual vol. 1 DE",
+    "quantity": 15,
+    "unit": "pcs",
+    "unit_price": 57.66,
+    "tax_rate": 7,
+    "amount": 864.9,
+    "page": 1
+   },
+   {
+    "line_no": 18,
+    "sku": "DW-83140",
+    "description": "Drinking water 1.5L x6 still",
+    "quantity": 20,
+    "unit": "case",
+    "unit_price": 7.38,
+    "tax_rate": 7,
+    "amount": 147.6,
+    "page": 1
+   },
+   {
+    "line_no": 19,
+    "sku": "LP-83391",
+    "description": "LED panel 60x60 3000K",
+    "quantity": 4,
+    "unit": "pcs",
+    "unit_price": 47.97,
+    "tax_rate": 20,
+    "amount": 191.88,
+    "page": 1
+   },
+   {
+    "line_no": 20,
+    "sku": "FR-36082",
+    "description": "Export freight parcel zone 1",
+    "quantity": 4,
+    "unit": "shp",
+    "unit_price": 192.29,
+    "tax_rate": 0,
+    "amount": 769.16,
+    "page": 1
+   },
+   {
+    "line_no": 21,
+    "sku": "SG-30371",
+    "description": "Safety gloves size 9 cut level 5",
+    "quantity": 18,
+    "unit": "pair",
+    "unit_price": 9,
+    "tax_rate": 20,
+    "amount": 162,
+    "page": 1
+   },
+   {
+    "line_no": 22,
+    "sku": "HB-56290",
+    "description": "Hex bolt M6x25 DIN 931 A2",
+    "quantity": 900,
+    "unit": "pcs",
+    "unit_price": 0.36,
+    "tax_rate": 20,
+    "amount": 324,
+    "page": 1
+   },
+   {
+    "line_no": 23,
+    "sku": "CP-86111",
+    "description": "Copper pipe 28mm EN 1057 R250",
+    "quantity": 122.9,
+    "unit": "m",
+    "unit_price": 13.28,
+    "tax_rate": 20,
+    "amount": 1632.11,
+    "page": 1
+   },
+   {
+    "line_no": 24,
+    "sku": "LP-50957",
+    "description": "LED panel 30x120 4000K, batch certified acc. to EN 10204 3.1, delivered on euro pallet",
+    "quantity": 6,
+    "unit": "pcs",
+    "unit_price": 24.21,
+    "tax_rate": 20,
+    "amount": 145.26,
+    "page": 1
+   },
+   {
+    "line_no": 25,
+    "sku": "FW-33510",
+    "description": "Flat washer M12 DIN 9021 A2",
+    "quantity": 8100,
+    "unit": "pcs",
+    "unit_price": 0.077,
+    "tax_rate": 20,
+    "amount": 623.7,
+    "page": 1
+   },
+   {
+    "line_no": 26,
+    "sku": "TM-11012",
+    "description": "Technical manual vol. 2 DE",
+    "quantity": 8,
+    "unit": "pcs",
+    "unit_price": 33.06,
+    "tax_rate": 7,
+    "amount": 264.48,
+    "page": 1
+   }
+  ],
+  "checkpoints": [],
+  "issues": [],
+  "evidence_source": "text_layer",
+  "calls": 3,
+  "cost_usd": 0.003,
+  "cost_unknown_calls": 0,
+  "prompt_tokens": 300,
+  "completion_tokens": 150,
+  "header_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "method": "layout",
+  "layout": {
+   "status": "confirmed",
+   "compared": 26,
+   "same": 26,
+   "crossed": 0,
+   "witness_page": 1,
+   "pages_layout": 1,
+   "pages_model": 0
+  },
+  "notes": [],
+  "quality": {},
+  "layout_attempts": [
+   {
+    "model": "google/gemini-3.1-flash-lite",
+    "cost_usd": 0.001,
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "lines": 0,
+    "issues": 0,
+    "error": null,
+    "cost_known": true
+   }
+  ],
+  "pages": [
+   {
+    "page": 1,
+    "lines": 26,
+    "repaired": 0,
+    "method": "layout",
+    "issues": [],
+    "attempts": [
+     {
+      "model": "google/gemini-3.1-flash-lite",
+      "cost_usd": 0.001,
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "lines": 26,
+      "issues": 0,
+      "error": null,
+      "cost_known": true
+     }
+    ]
+   }
+  ]
+ },
+ "requests": [
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 4000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read the header and the totals of a supplier invoice. You are given its first page and,",
+       "sha256": "b2c61944f4d3fdcff2b76bc46581cb38c94f48359876ec0af06957e0875c3fa2"
+      },
+      {
+       "type": "file",
+       "filename": "header.pdf",
+       "sha256": "fe3db488d89f268a35953259fee6156842282e9a2485ce761d2509abdaf373c2"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 900,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You are given the text layer of one page of a supplier invoice as numbered text lines:",
+       "sha256": "2f3595b5d52de82d6679027699db78057e94ca128246d7cd900e9a739c56b9d8"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "stream": true,
+   "usage": {
+    "include": true
+   },
+   "max_tokens": 16000,
+   "response_format": {
+    "type": "json_object"
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "first_line": "You read ONE page of a supplier invoice: page 1 of 1. The other pages are read",
+       "sha256": "fd0b18f0204616966a720a4c4204c2da77dd5c50ef8bc37f9f53d85fa23a77db"
+      },
+      {
+       "type": "file",
+       "filename": "page1.pdf",
+       "sha256": "fe3db488d89f268a35953259fee6156842282e9a2485ce761d2509abdaf373c2"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

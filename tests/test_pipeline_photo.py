@@ -15,8 +15,9 @@ from invoice_recognition.recognition import pipeline as pl
 from invoice_recognition.recognition import quality as ql
 from invoice_recognition.recognition.config import Config
 
-from fakes import PHOTO_H, SHEET, Server, header_for, jpeg, line, never, recording, run, scan
-from fakes import photo as draw
+from drawn import PHOTO_H, SHEET, jpeg, scan
+from drawn import photo as draw
+from fakes import Server, header_for, line, never, recording, run
 
 
 def drawn(kind: str = "good") -> bytes:

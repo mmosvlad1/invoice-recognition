@@ -4,8 +4,8 @@
 import * as api from "./api.mjs";
 import { APP_NAME } from "./format.mjs";
 import { showHome } from "./home.mjs";
-import { html, put } from "./html.mjs";
 import { checkCode } from "./model.mjs";
+import { showReview } from "./review.mjs";
 
 const view = document.getElementById("view");
 const live = document.getElementById("live");
@@ -72,19 +72,23 @@ api.onConnection((lost) => {
 // ------------------------------------------------------------------ the router
 
 let teardown = null;
-
-function showOpening() {
-  put(view, html`<section class="review"><a class="back" href="#/"><span aria-hidden="true">←</span> Documents</a>
-    <p class="empty">Opening…</p></section>`);
-  return null;
-}
+let focusUpload = false; // "Upload another file" on a failed document: focus the upload
 
 function route() {
   teardown?.();
   document.title = APP_NAME;
   const doc = location.hash.match(/^#\/doc\/([0-9a-f]{32})$/);
-  if (doc) teardown = showOpening();
-  else teardown = showHome(view, { announce });
+  if (doc) {
+    teardown = showReview(view, doc[1], {
+      announce,
+      onUploadAnother: () => {
+        focusUpload = true;
+      },
+    });
+  } else {
+    teardown = showHome(view, { announce, focusUpload });
+  }
+  focusUpload = false;
   view.focus({ preventScroll: true });
   window.scrollTo(0, 0);
 }

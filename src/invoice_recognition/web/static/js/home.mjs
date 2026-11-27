@@ -16,9 +16,9 @@ const SAMPLES = {
 /**
  * Show the home screen in `view`; returns its teardown.
  * @param {HTMLElement} view
- * @param {{announce: (text: string) => void}} options
+ * @param {{announce: (text: string) => void, focusUpload: boolean}} options
  */
-export function showHome(view, { announce }) {
+export function showHome(view, { announce, focusUpload }) {
   view.replaceChildren(document.getElementById("tpl-home").content.cloneNode(true));
   const $ = (id) => document.getElementById(id);
   const dropzone = $("dropzone");
@@ -94,6 +94,10 @@ export function showHome(view, { announce }) {
     }
   });
 
+  if (focusUpload) {
+    dropzone.scrollIntoView({ block: "center" });
+    input.focus({ preventScroll: true });
+  }
   const polling = api.poller(refresh);
   return () => {
     life.leave();

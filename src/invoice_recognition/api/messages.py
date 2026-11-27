@@ -26,3 +26,24 @@ def size(n: int) -> str:
     """A size in bytes as people read it: "10 MB" (1 MB = 1024 x 1024 bytes)."""
     mb = 1024 * 1024
     return f"{n / mb:g} MB" if n >= mb else f"{n:,} bytes"
+
+
+# --------------------------------------------------------------------------- #
+# Upload refusals (uploads.py; FILE_TOO_LARGE above)
+# --------------------------------------------------------------------------- #
+
+UNSUPPORTED_FILE = (
+    "Only PDF, JPEG and PNG files can be read, and this file is none of them. "
+    "Photos in HEIC format (iPhone) must be saved as JPEG first."
+)
+PDF_NEEDS_PASSWORD = "The PDF is protected by a password. Upload a copy that opens without one."
+PDF_DAMAGED = "The PDF could not be opened. It may be damaged or incomplete."
+PDF_NO_PAGES = "The PDF has no pages."
+TOO_MANY_PAGES = (
+    "The PDF has {pages} pages; the limit is {limit}. Split the file and upload the parts."
+)
+IMAGE_DAMAGED = "The image could not be opened. It may be damaged or incomplete."
+IMAGE_TOO_LARGE = (
+    "The image has more pixels than can be read; the limit is {limit}. "
+    "Save the image at a lower resolution."
+)

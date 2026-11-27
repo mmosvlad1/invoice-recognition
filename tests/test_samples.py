@@ -17,6 +17,7 @@ from samples import (
     exact,
     saved_layout,
     saved_scan_pages,
+    saved_second_pages,
     truth,
     truth_doc,
 )
@@ -71,6 +72,16 @@ def test_recorded_scan_answers_are_one_per_page_with_the_field() -> None:
     for p in saved["pages"]:
         answer = json.loads(p["text"])
         assert isinstance(answer["carry_in"], str) and answer["rows"]
+        assert len(p["prompt_sha256"]) == 64
+
+
+def test_recorded_second_readings_are_one_per_page_without_the_field() -> None:
+    saved = saved_second_pages()
+    assert saved["model"] == "openai/gpt-6-luna"
+    assert [p["page"] for p in saved["pages"]] == [1, 2, 3, 4, 5]
+    for p in saved["pages"]:
+        answer = json.loads(p["text"])
+        assert "carry_in" not in answer and answer["rows"]
         assert len(p["prompt_sha256"]) == 64
 
 

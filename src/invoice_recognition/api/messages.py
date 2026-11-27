@@ -564,6 +564,40 @@ def _blurred_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
     )
 
 
+def _item_codes(text: str) -> str:
+    """The flow's words for a second reading name the item code "SKU" where it labels a
+    value ("SKU A instead of B", "no SKU where ..."); a person reads "item code"."""
+    return re.sub(r"(^|, | and |no )SKU(?= )", r"\1item code", text)
+
+
+def _read_twice_row(m: re.Match[str], issue: Issue, line: Line | None) -> str:
+    place, page, found = m.groups()
+    return (
+        f"{place} on page {page} was read differently by a second model: "
+        f"{_item_codes(found)}. One of the two readings is wrong: check this line on the "
+        "invoice."
+    )
+
+
+def _read_twice_column(m: re.Match[str], issue: Issue, line: Line | None) -> str:
+    page, label, differ, compared, where, example = m.groups()
+    label = "item code" if label == "SKU" else label
+    return (
+        f"On page {page}, a second model reads the {label} differently on {differ} of "
+        f"{compared} line items (for example at {where}: {_item_codes(example)}). The two "
+        f"readings write this column differently, or one of them misread it: check the {label} "
+        "column on this page."
+    )
+
+
+def _read_twice_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
+    page, found, result, rest = m.groups()
+    return (
+        f"On page {page}, a second model finds {found} where the result has {result}. "
+        f"{rest}Check this page on the invoice."
+    )
+
+
 ISSUE_TEXTS: dict[str, Wording] = {
     # The document's totals.
     "doc_sums": _rules(
@@ -731,6 +765,44 @@ ISSUE_TEXTS: dict[str, Wording] = {
                 r"quantity and which is unit price"
             ),
             _unconfirmed("returned no line items"),
+        ),
+    ),
+    # A page of a scan read a second time, by another model (second_reading.py).
+    "second_reading": _rules(
+        (
+            (
+                r"(Position \d+|Line item \d+) on page (\d+): a second reading by another model "
+                r"gives (.*)\. One of the two readings is wrong; please check this line\."
+            ),
+            _read_twice_row,
+        ),
+        (
+            (
+                r"On page (\d+) a second reading by another model gives a different (.+?) on "
+                r"(\d+) of (\d+) line items, for example at (.+?): (.*)\. The two readings "
+                r"write this column differently, or one of them misread it; please check the "
+                r".+ column on this page\."
+            ),
+            _read_twice_column,
+        ),
+        (
+            (
+                r"Page (\d+): a second reading by another model finds (\d+ line items?); the "
+                r"result has (\d+)\. (.*)Please check this page\."
+            ),
+            _read_twice_page,
+        ),
+        (
+            (
+                r"Page (\d+): a second reading by another model finds as many line items as "
+                r"the result \((\d+)\), but not at the same positions\. (.*)Please check this "
+                r"page\."
+            ),
+            lambda m, i, line: (
+                f"On page {m[1]}, a second model finds as many line items as the result "
+                f"({m[2]}), but not at the same positions. {m[3]}Check this page on the "
+                "invoice."
+            ),
         ),
     ),
     # The document as a whole.

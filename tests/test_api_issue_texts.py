@@ -18,6 +18,7 @@ from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition import pipeline as pl
 from invoice_recognition.recognition import quality as ql
+from invoice_recognition.recognition import second_reading as sr
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.results import Result
@@ -563,6 +564,46 @@ def test_a_scan_with_no_text_at_all() -> None:
     res = run(drawn.scanned("blank", "blank"), "application/pdf", never)
     assert text(one(res.issues, "scan_no_text")) == (
         "No page of the scan has any text, so nothing was read. Check that this is the right file."
+    )
+
+
+def test_a_page_read_twice_by_two_models() -> None:
+    def item(no: int, **change: object) -> Line:
+        return line(no) | {"sku": f"HB-{no:05d}"} | change
+
+    [row] = sr.compare_page(
+        [item(1), item(2)], [item(1), item(2, sku="HB-0O002", quantity=3, amount=30)], 4
+    )
+    assert text(row) == (
+        "Position 2 on page 4 was read differently by a second model: item code HB-0O002 "
+        "instead of HB-00002, quantity 3 instead of 2 and amount 30 instead of 20. One of the "
+        "two readings is wrong: check this line on the invoice."
+    )
+    [empty] = sr.compare_page([item(1)], [item(1, sku=None)], 2)
+    assert "no item code where the result has HB-00001" in text(empty)
+    unnumbered = [item(n, line_no=None) for n in (1, 2, 3)]
+    [column] = sr.compare_page(unnumbered, [i | {"tax_rate": None} for i in unnumbered], 1)
+    assert text(column) == (
+        "On page 1, a second model reads the tax rate differently on 3 of 3 line items (for "
+        "example at line item 1: no tax rate where the result has 20%). The two readings write "
+        "this column differently, or one of them misread it: check the tax rate column on this "
+        "page."
+    )
+    [codes] = sr.compare_page(
+        [item(n) for n in (1, 2, 3)], [item(n, sku=f"hb {n:05d}") for n in (1, 2, 3)], 1
+    )
+    assert "reads the item code differently on 3 of 3" in text(codes)
+    assert "check the item code column" in text(codes)
+    [unmatched] = sr.compare_page([item(1), item(2), item(7)], [item(1), item(2), item(4)], 3)
+    assert text(unmatched) == (
+        "On page 3, a second model finds as many line items as the result (3), but not at the "
+        "same positions. Position 4 is not in the result. Position 7 of the result was not "
+        "found by the second reading. Check this page on the invoice."
+    )
+    [counts] = sr.compare_page(unnumbered, unnumbered[:1], 5)
+    assert text(counts) == (
+        "On page 5, a second model finds 1 line item where the result has 3. The lines could "
+        "not be matched one to one, so they were not compared. Check this page on the invoice."
     )
 
 

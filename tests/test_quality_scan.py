@@ -15,6 +15,7 @@ from reportlab.pdfgen import canvas
 
 from invoice_recognition.recognition import quality as ql
 
+import drawn
 from drawn import PHOTO_H as H
 from drawn import PHOTO_W as W
 from drawn import scan, scanned, sheet
@@ -179,3 +180,42 @@ def test_page_quality_serialises() -> None:
     assert out[0]["dpi"] == pytest.approx(72.0)
     assert out[1]["text"]["boxes"] == 0 and out[1]["ink"] == 0
     assert ql.measure_pdf_pages(scan(2)) == [ql.NO_IMAGE, ql.NO_IMAGE]
+
+
+# --------------------------------------------------------------------------- #
+# Pages too large to open
+# --------------------------------------------------------------------------- #
+
+
+def test_a_page_image_declaring_too_many_pixels_is_not_opened() -> None:
+    # 30000 x 30000 gray would take 900 MB once decoded; its size is read, nothing else.
+    data = drawn.declared_image_scan(30000, 30000)
+    assert len(data) < 2000
+    assert ql.measure_pdf_pages(data) == [ql.TooLarge(900_000_000, 50_000_000)]
+
+
+def test_the_pixel_cap_is_a_parameter_and_counts_every_image() -> None:
+    assert ql.measure_pdf_pages(scanned("good"), max_pixels=W * H - 1) == [
+        ql.TooLarge(W * H, W * H - 1)
+    ]
+    [measured] = ql.measure_pdf_pages(scanned("good"), max_pixels=W * H)
+    assert isinstance(measured, ql.PageQuality)
+
+
+def test_a_render_of_the_page_is_capped_at_the_same_number_of_pixels() -> None:
+    # A small image off to one side: the page is rendered at the image's density (2 px per
+    # point), which for the whole sheet is about 2 million pixels.
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(595, 842), invariant=True)
+    c.drawImage(ImageReader(sheet().resize((100, 100))), 40, 700, width=50, height=50)
+    c.save()
+    pdf = pdfium.PdfDocument(buf.getvalue())
+    try:
+        free = ql.scan_page_image(pdf[0])
+        capped = ql.scan_page_image(pdf[0], max_pixels=200_000)
+    finally:
+        pdf.close()
+    assert not isinstance(free, str | ql.TooLarge) and not isinstance(capped, str | ql.TooLarge)
+    assert free[0].width * free[0].height > 1_900_000
+    assert capped[0].width * capped[0].height <= 200_000
+    assert capped[1] == free[1]  # the density of the scan is reported as it is

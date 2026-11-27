@@ -5,6 +5,12 @@ from dataclasses import dataclass
 FAST = "google/gemini-3.1-flash-lite"
 """The cheap model that reads every page, the header and the layout."""
 
+MAX_IMAGE_PIXELS = 50_000_000
+"""The most pixels an image may have to be opened: an uploaded photo (the upload checks)
+and the image of a scanned page. Held in memory, 50 million pixels take 50 MB in gray and
+150 MB in colour, before any copy; a PDF of under 1 MB can declare a 30000 x 30000 image,
+which would take 900 MB."""
+
 
 @dataclass
 class Config:
@@ -65,3 +71,7 @@ class Config:
     # Fainter "text" on a page with no ink is the other side showing through: not text.
     scan_min_contrast: float = 0.10
     scan_blank_ink: float = 0.001  # less than this share of the page is clearly dark: blank
+    # A page whose images have more pixels than this together is neither opened nor sent: an
+    # issue scan_too_large (severity "error"), as for a page too blurred to read. Rendering a
+    # page is capped at the same number of pixels.
+    max_image_pixels: int = MAX_IMAGE_PIXELS

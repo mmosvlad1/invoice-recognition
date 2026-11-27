@@ -35,6 +35,7 @@ calibrated thresholds; each one states what it rests on.
 """
 
 import logging
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -45,6 +46,7 @@ import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
 from PIL import Image
 
+from invoice_recognition.recognition.config import MAX_IMAGE_PIXELS
 from invoice_recognition.shapes import JSONObject
 
 logger = logging.getLogger(__name__)
@@ -665,9 +667,25 @@ NOT_ONLY_A_SCAN = (
 )
 
 
-def scan_page_image(page: Any, min_cover: float = 0.85) -> tuple[Image.Image, float] | str:
+@dataclass(frozen=True)
+class TooLarge:
+    """A page whose images have more pixels together than may be opened: it is not
+    measured, and it is not read."""
+
+    pixels: int
+    limit: int
+
+
+def scan_page_image(
+    page: Any, min_cover: float = 0.85, max_pixels: int = MAX_IMAGE_PIXELS
+) -> tuple[Image.Image, float] | str | TooLarge:
     """A pypdfium2 page -> (the page in gray at the resolution of its scan, pixels per
-    point), or the reason why the page is not measured (NO_IMAGE, NOT_ONLY_A_SCAN).
+    point), or the reason why the page is not measured (NO_IMAGE, NOT_ONLY_A_SCAN), or
+    TooLarge when its images hold more than max_pixels pixels together.
+
+    The pixel sizes are read from the images' dictionaries before anything is decoded: a
+    PDF of under 1 MB can declare an image that takes gigabytes once decoded, and a render
+    of the page decodes every image on it. A render is capped at max_pixels as well.
 
     Only a page that is nothing but a scan is measured: images, and at most text that is
     not painted (the invisible layer an OCR program lays over a scan). Anything else that
@@ -680,6 +698,7 @@ def scan_page_image(page: Any, min_cover: float = 0.85) -> tuple[Image.Image, fl
     one resamples them, and that alone moved the score of a page by up to 14%."""
     w, h = page.get_size()
     best = None  # (area on the page, pixels per point, the image)
+    pixels = 0  # of every image on the page
     for obj in page.get_objects():
         if (
             obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT
@@ -690,11 +709,14 @@ def scan_page_image(page: Any, min_cover: float = 0.85) -> tuple[Image.Image, fl
         # An image inside a form reports its place in the form, not on the page.
         if obj.type != pdfium_c.FPDF_PAGEOBJ_IMAGE or obj.level > 0:
             return NOT_ONLY_A_SCAN
+        pw, ph = obj.get_px_size()  # from the image's dictionary: nothing is decoded
+        pixels += pw * ph
+        if pixels > max_pixels:
+            return TooLarge(pixels, max_pixels)
         left, bottom, right, top = obj.get_bounds()
         bw, bh = right - left, top - bottom
         if bw <= 0 or bh <= 0:
             continue
-        pw, ph = obj.get_px_size()
         if best is None or bw * bh > best[0]:
             # Long side against long side: an image placed turned by 90 degrees measures the same.
             best = (bw * bh, max(pw, ph) / max(bw, bh), obj)
@@ -719,21 +741,29 @@ def scan_page_image(page: Any, min_cover: float = 0.85) -> tuple[Image.Image, fl
     # A hair under the density: the renderer rounds the size up, and one pixel more would
     # resample every stored pixel.
     scale = min(density * (1 - 1e-6), SCAN_MAX_W / w)
+    if (w * scale + 1) * (h * scale + 1) > max_pixels:  # a page far taller than it is wide
+        # The sides of the same shape that hold max_pixels, less the pixel the renderer may
+        # round each side up by.
+        long_w, long_h = math.sqrt(max_pixels * w / h), math.sqrt(max_pixels * h / w)
+        scale = min((long_w - 1) / w, (long_h - 1) / h)
     rendered: Image.Image = page.render(scale=scale).to_pil().convert("L")
     return rendered, density
 
 
-def measure_pdf_pages(data: bytes) -> list[PageQuality | Exception | str]:
+def measure_pdf_pages(
+    data: bytes, max_pixels: int = MAX_IMAGE_PIXELS
+) -> list[PageQuality | Exception | str | TooLarge]:
     """One entry per page of the PDF: the numbers; the reason why the page is not measured
-    (NO_IMAGE, NOT_ONLY_A_SCAN); or the exception the measurement of that page ended with
-    (one page that breaks is that page's problem)."""
+    (NO_IMAGE, NOT_ONLY_A_SCAN); TooLarge for a page whose images may not be opened; or
+    the exception the measurement of that page ended with (one page that breaks is that
+    page's problem)."""
     pdf = pdfium.PdfDocument(data)
-    out: list[PageQuality | Exception | str] = []
+    out: list[PageQuality | Exception | str | TooLarge] = []
     try:
         for page in pdf:
             try:
-                got = scan_page_image(page)
-                out.append(got if isinstance(got, str) else measure_page(*got))
+                got = scan_page_image(page, max_pixels=max_pixels)
+                out.append(got if isinstance(got, str | TooLarge) else measure_page(*got))
             except Exception as e:  # fault boundary: one page
                 logger.warning("a page of the scan could not be measured", exc_info=True)
                 out.append(e)

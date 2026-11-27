@@ -14,6 +14,7 @@ import httpx
 import numpy as np
 import pytest
 from PIL import Image, ImageFilter
+from pypdf import PdfReader, PdfWriter
 
 from invoice_recognition.llm import file_part
 from invoice_recognition.recognition import carryover as co
@@ -29,6 +30,7 @@ from invoice_recognition.shapes import JSONObject, Line
 from drawn import (
     PHOTO_H,
     PHOTO_W,
+    declared_image_scan,
     jpeg,
     photo,
     scan,
@@ -406,7 +408,7 @@ def test_check_that_breaks_altogether_does_not_fail_the_document(
 def test_renderer_that_counts_other_pages_leaves_the_scan_unchecked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ql, "measure_pdf_pages", lambda data: [ql.NO_IMAGE])
+    monkeypatch.setattr(ql, "measure_pdf_pages", lambda data, max_pixels: [ql.NO_IMAGE])
     data, by_page = scanned("good", "good"), rows(1, 2)
     res = run(data, "application/pdf", server_for(by_page))
     assert res.status == "ok" and res.quality["verdict"] == "unchecked"
@@ -540,3 +542,46 @@ def test_page_whose_measurement_broke_is_logged_once(
     assert len(tracebacks) == 1
     ((_, error, _),) = tracebacks
     assert isinstance(error, ValueError) and str(error) == "unexpected"
+
+
+# --------------------------------------------------------------------------- #
+# A page too large to open
+# --------------------------------------------------------------------------- #
+
+TOO_LARGE = (
+    "The images of the page have 900,000,000 pixels, more than the 50,000,000 that may be "
+    "opened. The page was not sent to the model."
+)
+
+
+def test_a_page_too_large_to_open_is_not_read_and_says_so() -> None:
+    res = run(declared_image_scan(30000, 30000), "application/pdf", never)
+    assert res.status == "failed" and res.calls == 0
+    [issue] = res.issues
+    assert (issue.check, issue.page, issue.severity, issue.message) == (
+        "scan_too_large",
+        1,
+        "error",
+        TOO_LARGE,
+    )
+    [page] = res.quality["pages"]
+    assert page["verdict"] == "reject" and [r["code"] for r in page["reasons"]] == ["too_large"]
+
+
+def test_the_other_pages_of_the_scan_are_read() -> None:
+    writer = PdfWriter()
+    for data in (declared_image_scan(30000, 30000), scanned("good")):
+        writer.append(PdfReader(io.BytesIO(data)))
+    buf = io.BytesIO()
+    writer.write(buf)
+    server = Server(header_for([line(2)]), {2: [[line(2)]]})
+    res = run(buf.getvalue(), "application/pdf", server)
+    assert [p.method for p in res.pages] == ["skipped", "model"]
+    assert server.calls[1] == 0 and server.calls[2] == 1
+    assert [i.check for i in res.issues] == ["scan_too_large"]
+    assert res.status == "needs_review"
+
+
+def test_the_pixel_cap_comes_from_config() -> None:
+    res = run(scanned("good"), "application/pdf", never, Config(max_image_pixels=1000))
+    assert [i.check for i in res.issues] == ["scan_too_large"] and res.status == "failed"

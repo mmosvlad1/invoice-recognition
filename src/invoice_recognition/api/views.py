@@ -434,6 +434,11 @@ def _error(code: str, message: str | None = None) -> JobError:
     return JobError(code=code, message=_utf8(message or messages.JOB_ERRORS[code]))
 
 
+def internal_error() -> JobError:
+    """The error of a job whose reading raised: it has no result."""
+    return _error("internal_error")
+
+
 def _photo_reason(result: Result) -> str | None:
     """The message for a person of the first reason the photo was rejected for."""
     reasons = result.quality.get("reasons")

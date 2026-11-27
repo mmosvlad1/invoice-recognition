@@ -251,10 +251,14 @@ def codes(issues: list[Issue]) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def api_settings() -> Settings:
-    """Settings for a test app: every field given and no .env read, so a developer's
-    environment cannot leak in. The key is a dummy; no request leaves the test."""
-    return Settings(_env_file=None, openrouter_api_key=SecretStr("test-key"))
+# Any: each setting has its own type; Settings validates what it is given.
+def api_settings(**overrides: Any) -> Settings:
+    """Settings for a test app: every field given (its default unless overridden) and no
+    .env read, so a developer's environment cannot leak in. The key is a dummy; no
+    request leaves the test."""
+    given = {name: f.default for name, f in Settings.model_fields.items() if not f.is_required()}
+    given["openrouter_api_key"] = SecretStr("test-key")
+    return Settings(_env_file=None, **(given | overrides))
 
 
 @asynccontextmanager

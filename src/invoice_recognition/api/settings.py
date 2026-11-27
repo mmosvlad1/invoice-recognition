@@ -4,9 +4,13 @@ working directory. A variable set in the environment wins over the file.
 Every setting is documented in `.env.example`.
 """
 
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from typing import Self
+
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from invoice_recognition.recognition.config import FAST
 
 
 class Settings(BaseSettings):
@@ -15,6 +19,32 @@ class Settings(BaseSettings):
 
     openrouter_api_key: SecretStr = Field(
         description="The OpenRouter API key every model request is sent with. Required."
+    )
+
+    # The reading of documents.
+    max_documents: int = Field(
+        default=10,
+        ge=1,
+        description="Documents waiting or being read at once; one more is refused.",
+    )
+    reading_at_once: int = Field(
+        default=3, ge=1, description="Of those, how many are read at the same time."
+    )
+    model_requests_in_flight: int = Field(
+        default=24, ge=1, description="Model requests in flight at once, for all documents."
+    )
+    deadline_s: float = Field(
+        default=240.0, gt=0, description="Seconds one document may take, from the start of reading."
+    )
+    jobs_kept: int = Field(
+        default=50,
+        ge=1,
+        description="Documents the process keeps; older finished ones are dropped.",
+    )
+    page_model: str = Field(default=FAST, min_length=1, description="Reads every page.")
+    header_model: str = Field(default=FAST, min_length=1, description="Reads the header.")
+    layout_model: str = Field(
+        default=FAST, min_length=1, description="Describes the table of a PDF with a text layer."
     )
 
     @field_validator("openrouter_api_key")
@@ -32,6 +62,18 @@ class Settings(BaseSettings):
                 "without spaces",
             )
         return SecretStr(key)
+
+    @model_validator(mode="after")
+    def _room_for_every_unfinished_job(self) -> Self:
+        """A job is never dropped before it is finished, so the store must be able to hold
+        every document that may be waiting or being read."""
+        if self.jobs_kept < self.max_documents:
+            raise PydanticCustomError(
+                "jobs_kept_too_small",
+                "JOBS_KEPT ({kept}) must not be smaller than MAX_DOCUMENTS ({documents})",
+                {"kept": self.jobs_kept, "documents": self.max_documents},
+            )
+        return self
 
 
 # The last sentence of every refusal to start: what to do about it.
@@ -56,6 +98,8 @@ def load_settings() -> Settings:
             name = ".".join(str(part) for part in error["loc"]).upper()
             if error["type"] == "missing":
                 problems.append(f"{name} is not set.")
+            elif not name:  # a rule between settings: its message names them
+                problems.append(f"{error['msg']}.")
             else:
                 problems.append(f"{name} is not valid: {error['msg']}.")
         problems.append("Settings are read from the environment and from a .env file.")

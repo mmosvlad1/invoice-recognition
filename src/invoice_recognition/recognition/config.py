@@ -11,6 +11,13 @@ and the image of a scanned page. Held in memory, 50 million pixels take 50 MB in
 150 MB in colour, before any copy; a PDF of under 1 MB can declare a 30000 x 30000 image,
 which would take 900 MB."""
 
+OTHER = "openai/gpt-6-luna"
+"""A model of another provider, measured as the second reader of scanned pages."""
+
+OTHER_PAGE_MAX_TOKENS = 24_000
+"""Output tokens of one page read by OTHER. Its reasoning counts against them: the pages
+measured took 507-3148 tokens; none came near the limit."""
+
 
 @dataclass
 class Config:
@@ -75,3 +82,14 @@ class Config:
     # issue scan_too_large (severity "error"), as for a page too blurred to read. Rendering a
     # page is capped at the same number of pixels.
     max_image_pixels: int = MAX_IMAGE_PIXELS
+    # Scan: every page sent to the model without a quality warning is also read once by
+    # this model (a model of another provider: OTHER), with the plain page prompt, next to
+    # the first reading; it yields every shared request slot to first readers
+    # (second_reading.py, pipeline.Gate). The result keeps the first reading; the second
+    # never fails the document. None: off - the flow sends exactly the requests it sends
+    # without it. Photos and PDFs with a text layer are never read twice.
+    second_reading_model: str | None = None
+    second_reading_max_tokens: int = OTHER_PAGE_MAX_TOKENS
+    # A second reading still unanswered after this many seconds is given up (no retry).
+    # The longest measured page took 25 s.
+    second_reading_timeout_s: float = 60.0

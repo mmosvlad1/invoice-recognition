@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import re
+import time
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -92,6 +93,8 @@ def header_for(lines: list[Line]) -> Header:
 # A fake OpenRouter for the flow
 # --------------------------------------------------------------------------- #
 
+type Handler = Callable[[httpx.Request], httpx.Response]
+
 type Answer = list[Any] | dict[str, Any] | str | httpx.Response | BaseException
 """What the fake server answers: a list of rows (sent as {"rows": [...]}), any other
 JSON object, a raw SSE body, a ready response, or an exception to raise."""
@@ -103,15 +106,29 @@ class Server:
     header: answer to the header request. pages: {page: [answer of attempt 1, attempt 2,
     ...]}, the last one repeats. layout: answer to the layout request (text-layer PDFs).
     calls counts the requests: "header", "layout", and the page number of each page.
+
+    models: {model: handler} - a request to one of these models goes to its handler, by
+    the model named in the body, before anything else; it is not counted in calls. The
+    prompt cannot tell such a request apart: another model reading a page is asked with
+    the prompt the first one was asked with.
     """
 
     def __init__(
-        self, header: Answer, pages: dict[int, list[Answer]], layout: Answer | None = None
+        self,
+        header: Answer,
+        pages: dict[int, list[Answer]],
+        layout: Answer | None = None,
+        *,
+        models: Mapping[str, Handler] | None = None,
     ) -> None:
         self.header, self.pages, self.layout = header, pages, layout
+        self.models = dict(models or {})
         self.calls: Counter[int | str] = Counter()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        other = self.models.get(model_of(request))
+        if other is not None:
+            return other(request)
         kind = kind_of(request)
         answer: Answer | None
         if isinstance(kind, int):
@@ -138,6 +155,12 @@ class Server:
 _PAGE_OF = re.compile(r"page (\d+) of \d+")
 
 
+def model_of(request: httpx.Request) -> str:
+    """The model a request is sent to."""
+    model: str = json.loads(request.content)["model"]
+    return model
+
+
 def kind_of(request: httpx.Request) -> int | str:
     """Which request of the flow this is: "header", "layout", or the number of the page."""
     prompt = json.loads(request.content)["messages"][0]["content"][0]["text"]
@@ -148,9 +171,6 @@ def kind_of(request: httpx.Request) -> int | str:
     if prompt.startswith("You are given the text layer"):
         return "layout"
     return "header"
-
-
-type Handler = Callable[[httpx.Request], httpx.Response]
 
 
 class SlowServer:
@@ -166,39 +186,64 @@ class SlowServer:
     most at any time, of all requests / of page requests. A limit released before the
     answer is read therefore shows here. arrived: the kind of every request, in order.
     cancelled: the kinds of the requests the client gave up on while they were waited
-    for (the sleep was cancelled)."""
+    for (the sleep was cancelled).
+
+    models: {model: sleeps by kind} - the requests to one of these models, by the model
+    named in the body, sleep by their own table and are counted apart, in calls_of[model]
+    (not in sleeps, calls, arrived, cancelled or pages_in_flight / pages_most); they do
+    count in in_flight / most. For every model, most_of[model] is the most of its
+    requests in flight at any time. arrived_at: the time.monotonic() of each request in
+    arrived."""
 
     def __init__(
-        self, server: Handler, sleeps: Mapping[int | str, Sequence[float]] | None = None
+        self,
+        server: Handler,
+        sleeps: Mapping[int | str, Sequence[float]] | None = None,
+        *,
+        models: Mapping[str, Mapping[int | str, Sequence[float]]] | None = None,
     ) -> None:
         self.server, self.sleeps = server, dict(sleeps or {})
+        self.models = {m: dict(table) for m, table in (models or {}).items()}
         self.calls: Counter[int | str] = Counter()
+        self.calls_of: dict[str, Counter[int | str]] = {m: Counter() for m in self.models}
         self.arrived: list[int | str] = []
+        self.arrived_at: list[float] = []
         self.cancelled: list[int | str] = []
         self.in_flight = self.most = self.pages_in_flight = self.pages_most = 0
+        self.in_flight_of: Counter[str] = Counter()
+        self.most_of: Counter[str] = Counter()
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
-        kind = kind_of(request)
-        self.arrived.append(kind)
-        delays = self.sleeps.get(kind, [0.0])
-        delay = delays[min(self.calls[kind], len(delays) - 1)]
-        self.calls[kind] += 1
-        page = isinstance(kind, int)
+        kind, model = kind_of(request), model_of(request)
+        apart = model in self.models
+        sleeps, calls = (
+            (self.models[model], self.calls_of[model]) if apart else (self.sleeps, self.calls)
+        )
+        if not apart:
+            self.arrived.append(kind)
+            self.arrived_at.append(time.monotonic())
+        delays = sleeps.get(kind, [0.0])
+        delay = delays[min(calls[kind], len(delays) - 1)]
+        calls[kind] += 1
+        page = isinstance(kind, int) and not apart
         self.in_flight += 1
         self.pages_in_flight += page
+        self.in_flight_of[model] += 1
         self.most = max(self.most, self.in_flight)
         self.pages_most = max(self.pages_most, self.pages_in_flight)
+        self.most_of[model] = max(self.most_of[model], self.in_flight_of[model])
 
         def done() -> None:
             self.in_flight -= 1
             self.pages_in_flight -= page
+            self.in_flight_of[model] -= 1
 
         try:
             await asyncio.sleep(delay)
             answer = self.server(request)
             body = await answer.aread()
         except BaseException as e:
-            if isinstance(e, asyncio.CancelledError):
+            if isinstance(e, asyncio.CancelledError) and not apart:
                 self.cancelled.append(kind)
             done()
             raise

@@ -77,15 +77,30 @@ _PAGE_OF = re.compile(r"page (\d+) of \d+")
 
 class Model:
     """Answers the requests of the flow by their kind: header, layout, or a page by its
-    number. Each list holds the answers to the attempts in turn; the last one repeats."""
+    number. Each list holds the answers to the attempts in turn; the last one repeats.
 
-    def __init__(self, header: list[Any], pages: dict[int, list[Any]], layout: Any = None) -> None:
+    models: {model: handler} - a request to one of these models goes to its handler, by
+    the model named in the body, and is neither recorded in bodies nor counted in calls:
+    the requests of the scenario's own model stay what they are without it."""
+
+    def __init__(
+        self,
+        header: list[Any],
+        pages: dict[int, list[Any]],
+        layout: Any = None,
+        *,
+        models: dict[str, Callable[[httpx.Request], httpx.Response]] | None = None,
+    ) -> None:
         self.header, self.pages, self.layout = header, pages, layout
+        self.models = dict(models or {})
         self.calls: Counter[Any] = Counter()
         self.bodies: list[dict[str, Any]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
+        other = self.models.get(body["model"])
+        if other is not None:
+            return other(request)
         self.bodies.append(body)
         prompt = body["messages"][0]["content"][0]["text"]
         if prompt.startswith("You read ONE page"):

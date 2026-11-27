@@ -62,9 +62,11 @@ async def test_a_submitted_job_is_reported_at_once_and_then_with_its_result() ->
         "progress": {"pages_total": 2, "pages_done": 0},
         "error": None,
         "result": None,
+        "review": None,
     }
     assert first["created_at"].endswith("Z")
     assert final["status"] == "ok" and final["error"] is None
+    assert final["review"] == {"open_count": 0, "issues": []}
     assert final["progress"] == {"pages_total": 2, "pages_done": 2}
     assert final["started_at"] is not None and final["finished_at"] is not None
     result = final["result"]

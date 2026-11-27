@@ -6,7 +6,9 @@ from datetime import UTC, datetime
 import pytest
 
 from invoice_recognition.api.jobs import MAX_FILENAME, Job, JobStore, Status, StoreFull
+from invoice_recognition.api.review import decide
 from invoice_recognition.api.views import (
+    AcceptRequest,
     JobError,
     JobItem,
     JobView,
@@ -14,6 +16,7 @@ from invoice_recognition.api.views import (
     job_view,
     result_view,
 )
+from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.results import PageResult, Result
 
 from fakes import header_for, line
@@ -50,6 +53,7 @@ def test_a_new_job_is_queued_with_an_id_and_the_time_in_utc() -> None:
     assert j.status == "queued" and not j.finished
     assert j.created_at.tzinfo is UTC and j.created_at.microsecond == 0
     assert (j.started_at, j.finished_at, j.result, j.view, j.error) == (None,) * 5
+    assert j.decisions == {}
     assert j.size_bytes == len(b"%PDF-1.7 ...")
 
 
@@ -142,10 +146,11 @@ def test_a_job_is_shown_with_progress_and_times_ending_in_z() -> None:
         "progress": {"pages_total": 3, "pages_done": 1},
         "error": None,
         "result": None,
+        "review": None,
     }
     item = json.loads(job_item(j).model_dump_json())
-    assert "result" not in item
-    assert (item["line_count"], item["issue_count"]) == (None, None)
+    assert "result" not in item and "review" not in item
+    assert (item["line_count"], item["issue_count"], item["open_issue_count"]) == (None,) * 3
     assert item["created_at"] == "2026-11-27T14:02:11Z"
 
 
@@ -157,18 +162,80 @@ def test_a_finished_job_carries_its_result_and_its_counts() -> None:
     out = json.loads(job_view(j).model_dump_json())
     assert out["finished_at"] == "2026-11-27T14:03:00Z"
     assert [item["index"] for item in out["result"]["lines"]] == [0, 1, 2]
+    assert out["review"] == {"open_count": 0, "issues": []}
     item = json.loads(job_item(j).model_dump_json())
-    assert (item["line_count"], item["issue_count"]) == (3, 0)
+    assert (item["line_count"], item["issue_count"], item["open_issue_count"]) == (3, 0, 0)
+
+
+def test_a_document_with_issues_shows_where_their_review_stands() -> None:
+    j = job(status="needs_review")
+    res = read(1, 2, 3)
+    res.status = "needs_review"
+    res.issues = [
+        Issue(
+            "line_math",
+            "2 x 10.0 = 20.00, but amount is 99.0",
+            line=1,
+            suggestions=[{"set": {"line.amount": 20}, "source": "arithmetic"}],
+        ),
+        Issue("doc_sums", "lines add up", follows_from=[0]),
+        Issue("coverage", "page 1: 2 item rows printed, 3 extracted", page=1),
+    ]
+    j.result, j.view = res, result_view(res)
+    decide(j, 0, AcceptRequest(action="accept", suggestion=0), datetime(2026, 11, 27, tzinfo=UTC))
+    out = json.loads(job_view(j).model_dump_json())
+    assert out["review"] == {
+        "open_count": 1,
+        "issues": [
+            {
+                "id": 0,
+                "state": "accepted",
+                "suggestion": 0,
+                "set": {"line.amount": 20},
+                "decided_at": "2026-11-27T00:00:00Z",
+                "settled_by": [],
+            },
+            {
+                "id": 1,
+                "state": "settled",
+                "suggestion": None,
+                "set": None,
+                "decided_at": None,
+                "settled_by": [0],
+            },
+            {
+                "id": 2,
+                "state": "open",
+                "suggestion": None,
+                "set": None,
+                "decided_at": None,
+                "settled_by": [],
+            },
+        ],
+    }
+    # The reading's verdict and counts stay as they were.
+    assert out["status"] == "needs_review" and len(out["result"]["issues"]) == 3
+    item = json.loads(job_item(j).model_dump_json())
+    assert (item["issue_count"], item["open_issue_count"]) == (3, 1)
 
 
 def test_a_job_that_failed_with_internal_error_has_no_result_and_no_counts() -> None:
     j = job(status="failed")
     j.error = JobError(code="internal_error", message="Something went wrong.")
     view = json.loads(job_view(j).model_dump_json())
-    assert view["result"] is None
+    assert view["result"] is None and view["review"] is None
     assert view["error"] == {"code": "internal_error", "message": "Something went wrong."}
     item = json.loads(job_item(j).model_dump_json())
-    assert (item["line_count"], item["issue_count"]) == (None, None)
+    assert (item["line_count"], item["issue_count"], item["open_issue_count"]) == (None,) * 3
+
+
+def test_a_failed_job_with_a_result_has_no_review() -> None:
+    j = job(status="failed")
+    j.result = read(1)
+    j.result.status = "failed"
+    j.view = result_view(j.result)
+    assert job_view(j).result is not None and job_view(j).review is None
+    assert job_item(j).open_issue_count is None
 
 
 def test_no_result_and_no_error_are_shown_before_the_job_is_finished() -> None:
@@ -176,6 +243,7 @@ def test_no_result_and_no_error_are_shown_before_the_job_is_finished() -> None:
     j.view = result_view(read(1))
     j.error = JobError(code="internal_error", message="Something went wrong.")
     assert job_view(j).result is None and job_view(j).error is None
+    assert job_view(j).review is None and job_item(j).open_issue_count is None
     assert job_item(j).line_count is None and job_item(j).error is None
 
 
@@ -194,6 +262,16 @@ def test_every_field_sent_is_required_in_the_serialisation_schema() -> None:
         "progress",
         "error",
         "result",
+        "review",
+    }
+    assert set(defs["ReviewView"]["required"]) == {"open_count", "issues"}
+    assert set(defs["IssueReviewView"]["required"]) == {
+        "id",
+        "state",
+        "suggestion",
+        "set",
+        "decided_at",
+        "settled_by",
     }
     assert {"index", "line_no", "sku", "quantity", "amount"} <= set(defs["LineView"]["required"])
     assert len(defs["LineView"]["required"]) == 10
@@ -202,5 +280,5 @@ def test_every_field_sent_is_required_in_the_serialisation_schema() -> None:
     )
     assert set(defs["NoteView"]["required"]) == {"kind", "page", "text"}
     item = JobItem.model_json_schema(mode="serialization")
-    assert {"line_count", "issue_count"} <= set(item["required"])
+    assert {"line_count", "issue_count", "open_issue_count"} <= set(item["required"])
     assert "result" not in item["properties"]

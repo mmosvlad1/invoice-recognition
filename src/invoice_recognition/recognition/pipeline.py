@@ -87,10 +87,6 @@ LINE_KEYS = (
 # --------------------------------------------------------------------------- #
 
 
-def _plain(x: Decimal) -> int | float:
-    return int(x) if x == x.to_integral_value() else float(x)
-
-
 def repair(lines: list[Line]) -> int:
     """Fix the one error that can be fixed without a model: a quantity whose
     thousands separator was read as a decimal point ("8.200" -> 8.2). The
@@ -103,7 +99,7 @@ def repair(lines: list[Line]) -> int:
         if q is None or p is None or a is None or abs(ev.money(q * p) - a) <= ev.CENT:
             continue
         if abs(ev.money(q * 1000 * p) - a) <= ev.CENT:
-            item["quantity"] = _plain(q * 1000)
+            item["quantity"] = checks.plain(q * 1000)
             item["repaired"] = "quantity_x1000"
             fixed += 1
     return fixed
@@ -473,7 +469,7 @@ def layout_pages(
     for idx, item in enumerate(parsed.lines):
         first.setdefault(item["page"], idx)
         by_page[item["page"]].append(
-            {k: (_plain(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
+            {k: (checks.plain(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
         )
     done = 0
     for p in range(1, n + 1):  # a page without lines starts where the previous one ended
@@ -483,7 +479,7 @@ def layout_pages(
         totals[c["page"]].append(
             {
                 "label": c["label"],
-                "amount": _plain(c["amount"]),
+                "amount": checks.plain(c["amount"]),
                 "after_line": c["after_line"] - first[c["page"]],
                 "page": c["page"],
             }
@@ -836,6 +832,73 @@ def deadline_text(deadline_s: float | None, unread: list[int], header_read: bool
     if not unread and header_read:
         text.append("Every page was read; a repeated read of a page or of the header was stopped.")
     return " ".join(text)
+
+
+def link_issues(pages: list[PageResult], doc: Doc, issues: list[Issue], document: range) -> None:
+    """Once every issue exists, tie the issues that one wrong line amount causes to the
+    line_math issue of that line. Ids are positions in `issues` (Result.issues); `document`
+    holds those of the document's own checks, `pages` the pages in order.
+
+    The lines looked at are those whose line_math issue names the amount: they get
+    quantity x unit price for it. A line whose issue names only its quantity (read 1000
+    times too small) keeps its amount, which is the right one.
+
+    - follows_from: an issue of the document's arithmetic (the lines against the subtotal,
+      the tax by rate, a control total, on a page or in the document) that passes with
+      those amounts lists the line_math issues it needs (checks.explained_by_lines).
+    - agrees_with: a line's suggested amount says so when it makes the lines add up to the
+      subtotal and the amount as read does not, with the other lines in doubt either as
+      read or each at quantity x unit price. A suggested quantity or unit price leaves the
+      amount as it is and never does.
+
+    Changes no verdict, message or order. Never raises: what cannot be worked out is left
+    out. Its time grows with the length of the document, not with its square."""
+    try:
+        ids = {
+            i.line: n for n, i in enumerate(issues) if i.check == "line_math" and i.line is not None
+        }
+        amounts: dict[int, Decimal] = {}
+        for at, n in ids.items():
+            q = checks.dec(doc["lines"][at].get("quantity"))
+            p = checks.dec(doc["lines"][at].get("unit_price"))
+            if "line.amount" in issues[n].fields and q is not None and p is not None:
+                amounts[at] = ev.money(q * p)
+        position = {id(i): n for n, i in enumerate(issues)}
+        follows: dict[int, list[int]] = {}
+
+        def match(found: list[tuple[Issue, list[int]]], scope: list[int], offset: int) -> None:
+            # A check raises one issue per message, so the message names the issue it raised.
+            by_text: dict[tuple[str, str], list[int]] = {}
+            for n in scope:
+                by_text.setdefault((issues[n].check, issues[n].message), []).append(n)
+            for issue, needed in found:
+                for n in by_text.get((issue.check, issue.message), []):
+                    follows[n] = sorted(ids[at + offset] for at in needed)
+
+        if amounts:
+            match(checks.explained_by_lines(doc, amounts), list(document), 0)
+            start = 0
+            for pr in pages:
+                end = start + len(pr.lines)
+                local = {at - start: amounts[at] for at in range(start, end) if at in amounts}
+                if local:
+                    scope = [position[id(i)] for i in pr.issues if id(i) in position]
+                    part: Doc = {"lines": pr.lines, "checkpoints": pr.totals}
+                    match(checks.explained_by_lines(part, local, partial=True), scope, start)
+                start = end
+        agree = [
+            s
+            for at in checks.agree_with_subtotal(doc, amounts)
+            for s in issues[ids[at]].suggestions
+            if "line.amount" in s["set"]
+        ]
+    except Exception:  # fault boundary: a bug here costs the links, not the document
+        logger.warning("issues could not be linked to the line they follow from", exc_info=True)
+        return
+    for n, follows_from in follows.items():
+        issues[n].follows_from = follows_from
+    for s in agree:
+        s["agrees_with"] = "header.subtotal"
 
 
 @dataclass
@@ -1216,12 +1279,14 @@ async def _read(
                 i.line += offset
         issues += pr.issues
     doc: Doc = {"header": header, "lines": lines, "checkpoints": checkpoints}
+    start = len(issues)
     issues += (
         checks.check_doc_sums(doc)
         + checks.check_tax(doc)
         + checks.check_numbering(doc)
         + checks.check_checkpoints(doc)
     )
+    document = range(start, len(issues))
     if evidence is not None:
         issues += checks.check_header_grounding(doc, evidence)
 
@@ -1230,6 +1295,7 @@ async def _read(
     if gate.hit:
         text = deadline_text(cfg.deadline_s, unread, header_read)
         issues.append(Issue("deadline_exceeded", text))
+    link_issues(pages, doc, issues, document)
 
     all_attempts = header_attempts + layout_attempts + [a for p in pages for a in p.attempts]
     if unread or not lines or not header:

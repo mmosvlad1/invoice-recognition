@@ -74,8 +74,8 @@ fastapi run --port 8000
 uvicorn invoice_recognition.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-The interactive documentation (Swagger UI) is at `/docs`; its "Authorize"
-button takes the access code.
+The page is at `/` (below); the interactive documentation (Swagger UI) is at
+`/docs`, and its "Authorize" button takes the access code.
 
 Settings are read from the environment, then from `.env` in the working
 directory; a variable in the environment wins. Every setting is described in
@@ -98,6 +98,42 @@ Things to know before running it:
 - **A proxy in the environment is used.** The model requests honour
   `HTTPS_PROXY` (and, on macOS, the system proxy settings). A forgotten proxy
   looks like a provider that never answers.
+
+## The page
+
+Open `/` in a browser. The page asks for the access code once per tab (it keeps
+it in the tab's session storage, not local storage: `/docs` runs a third-party
+script on the same origin) and sends it with every request, the download of
+the file included.
+
+- **Home:** drop a PDF, JPEG or PNG (the 10 MB limit is checked before
+  sending), or try one of four samples: generated test invoices; the scan and
+  the photo are simulated from them, and the small PDF has one amount
+  misprinted on purpose (line 58 printed 344.34 instead of 688.68), so its
+  review has something to show. The list below polls once a second while a
+  document is still being read.
+- **Review:** the document on the left, drawn by PDF.js (or the photo), the
+  header and the rows on the right. Only the rows with an issue are shown
+  unless "Show all" is on; selecting a row scrolls the document to it, and with
+  every row shown the two panes scroll together. Each issue offers what its
+  `suggestions` allow (accept a value, keep the value as read, or mark it as
+  checked), with "Undo"; the issues that follow from a line's amount are shown
+  under that line and settle when the amount is accepted. On a PDF with a text
+  layer each value in doubt is framed where it is printed (amber while open,
+  green once decided; a row without a framed value gets a band over it); on a
+  scan or a photo, which carry no positions, the page is outlined instead.
+- Decisions are kept in memory with the job, like everything else, and lost on
+  a restart. A cell's final value is the `set` of its accepted decision, else
+  as read; cells never collide.
+
+The page is plain HTML, CSS and JavaScript modules served by the app from
+`src/invoice_recognition/web/`, with no build step. Its responses carry their
+own Content-Security-Policy (only the app's own files run; markup is made by
+one escaping template), and `/docs` keeps its own rules. PDF.js 4.10.38 is
+vendored unmodified under `static/vendor/` (Apache License 2.0; source and
+checksums in its `README.txt`): served by the app because the page's policy
+allows no script from elsewhere, and pinned to the version the page was
+designed and checked with.
 
 ## The API
 
@@ -255,7 +291,8 @@ scans are then read once.
 `ACCESS_CODE` is one shared secret, compared in constant time. A request to
 `/invoices...` without it (or with a wrong one) gets `401 unauthorized` with
 `WWW-Authenticate: Bearer`, before the server reads the request's body.
-Open without the code: `/health`, the documentation `/docs` (with
+Open without the code: the page `/` and its files `/static/...`, `/health`,
+the documentation `/docs` (with
 `/docs/oauth2-redirect`, which its "Authorize" button uses) and the schema
 `/openapi.json`; there is no `/redoc`. The code must be at least 16 printable
 ASCII characters without spaces:
@@ -271,7 +308,6 @@ The code keeps strangers out; it does not tell users apart.
 
 ## Not built yet
 
-- the web page for uploading and reviewing invoices (the API is all there is);
 - a container image and the deployment;
 - a fallback model when a request fails;
 - where each value is printed on a scan or a photo (no OCR: only the page).

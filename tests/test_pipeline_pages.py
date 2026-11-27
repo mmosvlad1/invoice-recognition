@@ -163,6 +163,23 @@ def test_cut_off_answer_keeps_its_complete_rows_and_is_retried() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.parametrize(
+    "broken",
+    [
+        '{"rows": [{"line_no": 1, "sku": "SKU-001", "amount": ' + "9" * 5_000 + "}]}",
+        '{"rows": ' + "[" * 1_000_000 + "]" * 1_000_000 + "}",
+    ],
+    ids=["huge-integer", "deep-nesting"],
+)
+def test_an_answer_the_json_parser_refuses_is_retried_and_its_cost_kept(broken: str) -> None:
+    rows = [line(1), line(2)]
+    res = run(scan(1), "application/pdf", Server(header_for(rows), {1: [sse(broken), rows]}))
+    assert res.status == "ok" and res.lines == [item | {"page": 1} for item in rows]
+    assert [a.error for a in res.pages[0].attempts] == [None, None]
+    assert [a.lines for a in res.pages[0].attempts] == [0, 2]
+    assert res.calls == 3 and res.cost_usd == pytest.approx(0.003)
+
+
 def test_unknown_cost_is_visible() -> None:
     first = httpx.Response(500, text="upstream error")
     second = [line(1), line(2)]

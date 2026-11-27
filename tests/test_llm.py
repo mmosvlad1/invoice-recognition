@@ -275,6 +275,32 @@ def test_parse_json_rejects_anything_but_an_object(text: str) -> None:
     assert parse_json(text) is None
 
 
+HUGE = "9" * 5_000  # an integer Python refuses to convert (more than 4,300 digits)
+DEEP = "[" * 1_000_000 + "]" * 1_000_000  # nesting deeper than the parser can follow
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{"rows": [{"sku": "A-1", "amount": ' + HUGE + "}]}", '{"rows": ' + DEEP + "}"],
+    ids=["huge-integer", "deep-nesting"],
+)
+def test_json_the_parser_refuses_is_a_broken_answer(text: str) -> None:
+    assert parse_json(text) is None
+    # Not salvaged from either, and nothing raised.
+    assert salvage_lines(text) == []
+
+
+def test_salvage_lines_skips_an_object_with_a_number_too_long_to_read() -> None:
+    text = '[{"sku": "A-1", "amount": 1}, {"sku": "A-2", "amount": ' + HUGE + "}"
+    assert salvage_lines(text) == [{"sku": "A-1", "amount": 1}]
+
+
+def test_a_stream_event_the_parser_refuses_is_a_broken_chunk() -> None:
+    usage = 'data: {"usage": {"prompt_tokens": ' + HUGE + "}}\n\n"
+    res = call(answer(sse('{"rows": []}').replace("data: [DONE]", usage + "data: [DONE]")))
+    assert (res.error, res.text) == (None, '{"rows": []}')
+
+
 def test_salvage_lines_of_a_cut_off_answer() -> None:
     text = (
         '{"header": {"supplier_name": "ACME"}, "rows": ['

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from invoice_recognition.api import messages, problems, review, uploads, views
 from invoice_recognition.api.access import AccessMiddleware
 from invoice_recognition.api.jobs import Job, StoreFull, now
+from invoice_recognition.api.page import mount_page
 from invoice_recognition.api.problems import ApiError, Problem
 from invoice_recognition.api.service import Service
 from invoice_recognition.api.settings import Settings
@@ -320,11 +321,17 @@ def _invoices(settings: Settings) -> APIRouter:
     return router
 
 
-def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+def create_app(
+    settings: Settings,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    service_class: type[Service] = Service,
+) -> FastAPI:
     """The API with the given settings.
 
     transport replaces the network for the requests to the model provider (tests pass an
-    `httpx.MockTransport`); None in production."""
+    `httpx.MockTransport`); None in production. service_class: the reading service the
+    app starts (the demo server passes a subclass that tags each job's requests)."""
 
     code = settings.access_code.get_secret_value()
 
@@ -341,7 +348,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         client = openrouter_client(
             settings.openrouter_api_key.get_secret_value(), transport=transport
         )
-        service = Service(settings, client)
+        service = service_class(settings, client)
         service.start()
         app.state.service = service
         try:
@@ -375,6 +382,8 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     app.head("/health", include_in_schema=False)(health)
 
     app.include_router(_invoices(settings))
+    # The page and its files: open, like /health; the page asks for the code itself.
+    mount_page(app)
     if code:
         # Outside the router, where the body limit and the form parsing are: it answers
         # before anything reads the body.

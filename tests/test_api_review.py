@@ -2,8 +2,6 @@
 /invoices/{id}/issues/{issue_id}/resolution, the review in GET /invoices/{id} and the
 open count in the list. Fake OpenRouter, no network."""
 
-import functools
-import io
 import json
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
@@ -13,7 +11,6 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import SecretStr
-from pypdf import PdfReader, PdfWriter
 
 from invoice_recognition.api import app as app_module
 from invoice_recognition.api import messages
@@ -25,8 +22,8 @@ from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject
 
 import drawn
-from fakes import Answer, Server, SlowServer, api_settings, header_for, line, serve, wait_final
-from samples import saved_layout, truth_doc
+from demo_server import MISPRINTED, SMALL, misprint_reader
+from fakes import Server, SlowServer, api_settings, header_for, line, serve, wait_final
 
 CODE = "s3cret-Code_42-long-enough"
 RIGHT = {"Authorization": f"Bearer {CODE}"}
@@ -35,37 +32,12 @@ RIGHT = {"Authorization": f"Bearer {CODE}"}
 # A generated invoice with one amount misprinted
 # --------------------------------------------------------------------------- #
 
-# The 59th line of m_grouped (page 2) is 18 x 38.26 = 688.68; printed as 344.34 here,
-# with the same six characters, so the right-aligned cell keeps its place.
-PRINTED, MISPRINTED = 688.68, 344.34
+# The small sample of the page: line 58 of m_grouped (page 2) is 18 x 38.26 = 688.68,
+# printed as 344.34, with the same six characters.
 
 
-@functools.cache
 def misprinted() -> bytes:
-    """m_grouped.pdf with the amount 688.68 on page 2 printed as 344.34. It is printed
-    once in the file, and 344.34 nowhere."""
-    data, _, _, _ = truth_doc("m_grouped")
-    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
-    page = writer.pages[1]
-    content = page.get_contents()
-    assert content is not None
-    raw = content.get_data()
-    assert raw.count(b"(688.68) Tj") == 1 and b"344.34" not in raw
-    content.set_data(raw.replace(b"(688.68) Tj", b"(344.34) Tj"))
-    page.replace_contents(content)
-    out = io.BytesIO()
-    writer.write(out)
-    return out.getvalue()
-
-
-def model() -> Server:
-    """A model that reads the misprinted invoice as printed: the header, the layout of its
-    table, and each page's rows (page 2 with 344.34)."""
-    _, _, header, pages = truth_doc("m_grouped")
-    page_2 = [r | {"amount": MISPRINTED} if r["amount"] == PRINTED else r for r in pages[2]]
-    answers: dict[int, list[Answer]] = {p: [rows] for p, rows in pages.items()}
-    answers[2] = [page_2]
-    return Server(header, answers, saved_layout("m_grouped"))
+    return SMALL.read_bytes()
 
 
 # What the flow finds on it: the line, a page card, and three issues of the document's
@@ -129,7 +101,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[datetime]]:
 
 @pytest.mark.anyio
 async def test_the_misprinted_invoice_has_one_line_and_what_follows_from_it() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         body = (await client.get(f"/invoices/{job_id}")).json()
         listed = (await client.get("/invoices")).json()["items"]
@@ -166,7 +138,7 @@ async def test_the_misprinted_invoice_has_one_line_and_what_follows_from_it() ->
 async def test_accepting_the_amount_settles_what_follows_and_changes_nothing_read(
     clock: list[datetime],
 ) -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         before = (await client.get(f"/invoices/{job_id}")).json()
         answer = await client.put(path(job_id, LINE_MATH), json=ACCEPT_AMOUNT)
@@ -210,7 +182,7 @@ async def test_accepting_the_amount_settles_what_follows_and_changes_nothing_rea
     ids=["quantity", "unit-price", "keep"],
 )
 async def test_anything_but_the_amount_settles_nothing(decision: JSONObject) -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         answer = await client.put(path(job_id, LINE_MATH), json=decision)
     assert answer.status_code == 200, answer.text
@@ -220,7 +192,7 @@ async def test_anything_but_the_amount_settles_nothing(decision: JSONObject) -> 
 
 @pytest.mark.anyio
 async def test_undo_reopens_and_undoing_nothing_is_fine() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         await client.put(path(job_id, LINE_MATH), json=ACCEPT_AMOUNT)
         undone = await client.delete(path(job_id, LINE_MATH))
@@ -236,7 +208,7 @@ async def test_undo_reopens_and_undoing_nothing_is_fine() -> None:
 async def test_the_same_decision_twice_changes_nothing_and_another_replaces_it(
     clock: list[datetime],
 ) -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         first = await client.put(path(job_id, LINE_MATH), json=ACCEPT_AMOUNT)
         second = await client.put(path(job_id, LINE_MATH), json=ACCEPT_AMOUNT)
@@ -253,7 +225,7 @@ async def test_the_same_decision_twice_changes_nothing_and_another_replaces_it(
 
 @pytest.mark.anyio
 async def test_every_issue_checked() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         await client.put(path(job_id, COVERAGE), json=KEEP)  # "mark as checked"
         answer = await client.put(path(job_id, LINE_MATH), json=ACCEPT_AMOUNT)
@@ -269,7 +241,7 @@ async def test_every_issue_checked() -> None:
 
 @pytest.mark.anyio
 async def test_an_unknown_document_or_issue_is_not_found() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         answers = {
             "job-put": await client.put(path("0" * 32, 0), json=KEEP),
@@ -289,7 +261,7 @@ async def test_an_unknown_document_or_issue_is_not_found() -> None:
 
 @pytest.mark.anyio
 async def test_nothing_to_accept_is_an_invalid_resolution() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         none = await client.put(path(job_id, COVERAGE), json={"action": "accept", "suggestion": 0})
         past = await client.put(path(job_id, LINE_MATH), json={"action": "accept", "suggestion": 3})
@@ -317,7 +289,7 @@ async def test_nothing_to_accept_is_an_invalid_resolution() -> None:
     ],
 )
 async def test_a_body_off_the_schema_is_an_invalid_request(body: Any) -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         answer = await client.put(path(job_id, LINE_MATH), json=body)
         review = (await client.get(f"/invoices/{job_id}")).json()["review"]
@@ -327,7 +299,7 @@ async def test_a_body_off_the_schema_is_an_invalid_request(body: Any) -> None:
 
 @pytest.mark.anyio
 async def test_a_body_that_is_not_json_is_an_invalid_request() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         headers = {"Content-Type": "application/json"}
         answers = [
@@ -341,7 +313,7 @@ async def test_a_body_that_is_not_json_is_an_invalid_request() -> None:
 @pytest.mark.anyio
 async def test_a_body_over_1_kib_is_refused() -> None:
     body = json.dumps(KEEP | {"pad": "x" * 1024}).encode()
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         answer = await client.put(
             path(job_id, COVERAGE), content=body, headers={"Content-Type": "application/json"}
@@ -359,7 +331,7 @@ async def test_a_body_over_1_kib_sent_in_chunks_is_a_body_too_large_problem() ->
         for at in range(0, len(body), 512):
             yield body[at : at + 512]
 
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         job_id = await read(client)
         answer = await client.put(
             path(job_id, COVERAGE), content=chunks(), headers={"Content-Type": "application/json"}
@@ -372,7 +344,7 @@ async def test_a_body_over_1_kib_sent_in_chunks_is_a_body_too_large_problem() ->
 
 
 def held() -> SlowServer:
-    return SlowServer(model(), {"header": [30.0]})
+    return SlowServer(misprint_reader(), {"header": [30.0]})
 
 
 @pytest.mark.anyio
@@ -407,7 +379,7 @@ async def test_a_failed_document_cannot_be_decided() -> None:
 @pytest.mark.anyio
 async def test_a_document_dropped_by_retention_is_not_found() -> None:
     settings = api_settings(max_documents=1, jobs_kept=1)
-    async with serve(model(), settings) as (client, _):
+    async with serve(misprint_reader(), settings) as (client, _):
         first = await read(client)
         await client.put(path(first, LINE_MATH), json=ACCEPT_AMOUNT)
         await upload(client, misprinted(), {})  # the store keeps one: the first is dropped
@@ -487,7 +459,7 @@ def store(app: FastAPI, job: Job) -> str:
 
 @pytest.mark.anyio
 async def test_two_accepted_values_for_one_cell_conflict() -> None:
-    async with serve(model()) as (client, app):
+    async with serve(misprint_reader()) as (client, app):
         job_id = store(app, disagreeing(21.0))
         await client.put(path(job_id, 0), json={"action": "accept", "suggestion": 1})
         answer = await client.put(path(job_id, 1), json={"action": "accept", "suggestion": 0})
@@ -509,7 +481,7 @@ async def test_accepting_another_item_of_the_same_issue_replaces_it() -> None:
             {"set": {"line.amount": 21}, "source": "arithmetic"},
         ],
     )
-    async with serve(model()) as (client, app):
+    async with serve(misprint_reader()) as (client, app):
         job_id = store(app, built([both]))
         first = await client.put(path(job_id, 0), json={"action": "accept", "suggestion": 0})
         second = await client.put(path(job_id, 0), json={"action": "accept", "suggestion": 1})
@@ -532,7 +504,7 @@ async def test_an_item_code_that_reads_like_a_number_is_compared_as_text() -> No
             suggestions=[{"set": {"line.sku": value}, "source": "second_reading"}],
         )
 
-    async with serve(model()) as (client, app):
+    async with serve(misprint_reader()) as (client, app):
         job_id = store(app, built([sku("0012"), sku("12")]))
         await client.put(path(job_id, 0), json={"action": "accept", "suggestion": 0})
         answer = await client.put(path(job_id, 1), json={"action": "accept", "suggestion": 0})
@@ -549,7 +521,7 @@ async def test_an_id_outside_the_issue_list_leaves_the_issue_open(ids: list[int]
         suggestions=[{"set": {"line.amount": 20}, "source": "arithmetic"}],
     )
     issues = [line_math, Issue("doc_sums", "lines add up", follows_from=ids)]
-    async with serve(model()) as (client, app):
+    async with serve(misprint_reader()) as (client, app):
         job_id = store(app, built(issues))
         put = await client.put(path(job_id, 0), json={"action": "accept", "suggestion": 0})
         job = await client.get(f"/invoices/{job_id}")
@@ -561,7 +533,7 @@ async def test_an_id_outside_the_issue_list_leaves_the_issue_open(ids: list[int]
 
 @pytest.mark.anyio
 async def test_the_same_amount_written_differently_is_no_conflict() -> None:
-    async with serve(model()) as (client, app):
+    async with serve(misprint_reader()) as (client, app):
         job_id = store(app, disagreeing("20.00"))
         await client.put(path(job_id, 0), json={"action": "accept", "suggestion": 1})
         answer = await client.put(path(job_id, 1), json={"action": "accept", "suggestion": 0})
@@ -596,7 +568,7 @@ class Pulled:
 async def test_without_the_code_a_decision_is_refused_before_its_body_is_read(
     method: str,
 ) -> None:
-    async with serve(model(), api_settings(access_code=SecretStr(CODE))) as (client, _):
+    async with serve(misprint_reader(), api_settings(access_code=SecretStr(CODE))) as (client, _):
         job_id = await upload(client, misprinted(), RIGHT)
         await wait_final(client, job_id, RIGHT)
         body = Pulled()
@@ -612,7 +584,7 @@ async def test_without_the_code_a_decision_is_refused_before_its_body_is_read(
 
 @pytest.mark.anyio
 async def test_the_documentation_describes_both_operations_and_their_problems() -> None:
-    async with serve(model()) as (client, _):
+    async with serve(misprint_reader()) as (client, _):
         schema: JSONObject = (await client.get("/openapi.json")).json()
     operations = schema["paths"]["/invoices/{job_id}/issues/{issue_id}/resolution"]
     assert set(operations) == {"put", "delete"}

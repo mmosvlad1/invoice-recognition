@@ -297,3 +297,11 @@ font a PDF does not embed (the standard Helvetica of the sample invoices), pdfiu
 measures characters on a substitute font, so where a word starts and ends along
 its line can differ by up to about 0.9 point; the tests allow for that, and the
 height of a word is computed from its baseline and font size, the same on both.
+
+Node 20+ runs the page's script tests (`tests/js/`, Node's own test runner, started by
+`tests/test_web_js.py`); they are skipped without it, and required in CI.
+
+To try the page without a key, `uv run python tests/demo_server.py` serves the app on
+http://127.0.0.1:8012/ with a fake model that knows the page's four samples (access code
+`try-the-demo-page-0001`; `--port`, `--delay` and `--access-code` change them). Nothing
+leaves the machine.

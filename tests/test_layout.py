@@ -14,9 +14,9 @@ from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition.layout import Column, Layout, TextLine, Word, parse_document
 from invoice_recognition.shapes import JSONObject
 
-from boxes_help import Oracle
+from boxes_help import Oracle, layout_of
 from fakes import make_pdf
-from samples import INVOICES, TEXT_LAYER
+from samples import INVOICES, TEXT_LAYER, WITH_LAYOUT, saved_layout
 
 
 def left(text: str, x0: float) -> Word:
@@ -73,6 +73,9 @@ def test_description_continues_across_a_page_break() -> None:
     parsed = parse_document(pages, LAYOUT)
     assert [d["description"] for d in parsed.lines] == ["Bolt zinc", "Nut plated"]
     assert [(n["kind"], n["page"]) for n in parsed.notes] == [("joined_across_pages", 2)]
+    # the rows each item was read from, on its own page: the text carried to page 2 is
+    # in the value of the first item, not among its rows
+    assert parsed.rows == [[pages[0][0]], [pages[1][2], pages[1][3]]]
 
     # a declared row between the two (a carry-forward at the top of the page) closes the item
     carried = [left("Carried", 300.0), left("forward", 345.0), right("20.00", 550.0)]
@@ -298,6 +301,27 @@ def test_text_lines_keep_the_box_of_every_word(name: str) -> None:
                     assert oracle.text_under(tl.page, rect) == w.text, (tl.page, tl.index, w)
                     words += 1
     assert words > 300
+
+
+@pytest.mark.parametrize("name", WITH_LAYOUT)
+def test_each_line_item_keeps_the_rows_it_was_read_from(name: str) -> None:
+    data = (INVOICES / f"{name}.pdf").read_bytes()
+    pages = lay.text_lines(data)
+    layout = layout_of(data, pages, saved_layout(name))
+    parsed = parse_document(pages, layout)
+    assert len(parsed.lines) > 10 and len(parsed.rows) == len(parsed.lines)
+    ix = layout.index("description")
+    assert ix is not None
+    last_of_page = {item["page"]: i for i, item in enumerate(parsed.lines)}
+    for i, (item, rows) in enumerate(zip(parsed.lines, parsed.rows)):
+        assert {r.page for r in rows} == {item["page"]}
+        cells, _ = lay.assign(rows[0].words, layout.columns)
+        text = " ".join([*(w.text for w in cells.get(ix, [])), *(r.text for r in rows[1:])])
+        if i == last_of_page[item["page"]]:  # may go on at the top of the next page
+            assert item["description"].startswith(text)
+        else:
+            assert item["description"] == text
+    assert any(len(rows) > 1 for rows in parsed.rows)  # every sample wraps a description
 
 
 def test_a_word_in_two_font_sizes_spans_its_tallest_character() -> None:

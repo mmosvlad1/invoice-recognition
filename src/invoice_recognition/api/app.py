@@ -2,10 +2,12 @@
 the app does."""
 
 import asyncio
+import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, File, Request, Response, UploadFile
@@ -24,6 +26,9 @@ ENVELOPE = 64 * 1024
 
 # When a refused upload may be tried again, in seconds.
 RETRY_AFTER = 30
+
+# The bytes of a file never change for an id: a browser may keep them, for itself only.
+IMMUTABLE = "private, max-age=31536000, immutable"
 
 # What the status of a job is now must never be answered from a cache.
 NO_STORE = "no-store"
@@ -54,6 +59,20 @@ ServiceDep = Annotated[Service, Depends(get_service)]
 
 def _problem(description: str) -> dict[str, Any]:
     return {"model": Problem, "description": description}
+
+
+def content_disposition(filename: str) -> str:
+    """Content-Disposition for showing a file in the browser under the name it was uploaded
+    with. The name is untrusted: quotes, backslashes and control characters are removed;
+    a name that is not plain URL-safe ASCII is sent percent-encoded as UTF-8 (filename*),
+    as Starlette's FileResponse does. No name left: no filename at all."""
+    name = "".join(c for c in filename if c not in '"\\' and unicodedata.category(c) != "Cc")
+    if not name:
+        return "inline"
+    encoded = quote(name)
+    if encoded == name:
+        return f'inline; filename="{name}"'
+    return f"inline; filename*=utf-8''{encoded}"
 
 
 def _invoices(settings: Settings) -> APIRouter:
@@ -138,6 +157,13 @@ def _invoices(settings: Settings) -> APIRouter:
         response.headers["Location"] = f"/invoices/{job.id}"
         return views.job_view(job)
 
+    @router.get("", summary="Every document held")
+    async def list_invoices(service: ServiceDep, response: Response) -> views.JobList:
+        """Every document the server still holds, newest first, without results; a
+        finished one has its counts of lines and issues. The page polls this list."""
+        response.headers["Cache-Control"] = NO_STORE
+        return views.JobList(items=[views.job_item(j) for j in service.store.newest_first()])
+
     @router.get(
         "/{job_id}",
         summary="Status and result of a document",
@@ -152,6 +178,36 @@ def _invoices(settings: Settings) -> APIRouter:
             raise ApiError(404, "not_found", messages.JOB_NOT_FOUND)
         response.headers["Cache-Control"] = NO_STORE
         return views.job_view(job)
+
+    @router.get(
+        "/{job_id}/file",
+        summary="The uploaded file",
+        response_class=Response,
+        responses={
+            200: {
+                "description": "The file as it was uploaded.",
+                "content": {mime: {} for mime in ("application/pdf", "image/jpeg", "image/png")},
+            },
+            404: _problem("No document with this id is kept (not_found)."),
+        },
+    )
+    async def get_file(job_id: str, service: ServiceDep) -> Response:
+        """The original bytes, with the type decided at upload, to show in the browser. No
+        range requests: the file is sent whole."""
+        job = service.store.get(job_id)
+        if job is None:
+            raise ApiError(404, "not_found", messages.JOB_NOT_FOUND)
+        # Starlette's Response sets Content-Length; no compression middleware is added.
+        return Response(
+            job.data,
+            media_type=job.mime,
+            headers={
+                "Content-Disposition": content_disposition(job.filename),
+                # Shown as the type decided at upload, never as what a browser guesses.
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": IMMUTABLE,
+            },
+        )
 
     return router
 

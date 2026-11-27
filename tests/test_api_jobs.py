@@ -53,9 +53,24 @@ def test_a_new_job_is_queued_with_an_id_and_the_time_in_utc() -> None:
     assert j.size_bytes == len(b"%PDF-1.7 ...")
 
 
+@pytest.mark.parametrize(
+    ("sent", "kept"),
+    [
+        ("../../etc/\u202efdp.exe", "fdp.exe"),
+        ("C:\\Users\\me\\invoice.pdf", "invoice.pdf"),
+        ("a\u200bb\u2066c.pdf", "abc.pdf"),
+        ("folder/", ""),
+        ("Рахунок №7.pdf", "Рахунок №7.pdf"),
+    ],
+)
+def test_a_file_name_keeps_its_last_part_without_format_characters(sent: str, kept: str) -> None:
+    assert job(sent).filename == kept
+
+
 def test_a_long_file_name_is_cut_to_255_characters() -> None:
     assert job("é" * 300).filename == "é" * MAX_FILENAME
-    assert job("<b>x</b>.pdf").filename == "<b>x</b>.pdf"  # text, kept as sent
+    html = "<img src=x onerror=alert(1)>.pdf"
+    assert job(html).filename == html  # text, kept as sent: whoever shows it escapes it
 
 
 def test_a_file_name_that_cannot_be_utf8_is_made_safe_once() -> None:

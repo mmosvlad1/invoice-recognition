@@ -600,6 +600,12 @@ def _common(job: Job) -> _Common:
     }
 
 
+class JobList(_View):
+    """Every job the process holds (GET /invoices)."""
+
+    items: list[JobItem] = Field(description="Newest first. No paging.")
+
+
 def job_view(job: Job) -> JobView:
     return JobView(**_common(job), result=job.view if job.finished else None)
 

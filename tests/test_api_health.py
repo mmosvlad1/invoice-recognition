@@ -22,7 +22,12 @@ async def test_the_documentation_is_served() -> None:
         schema = (await client.get("/openapi.json")).json()
     assert docs.status_code == 200 and "swagger" in docs.text.lower()
     assert schema["info"]["title"] == "Invoice recognition"
-    assert list(schema["paths"]) == ["/health", "/invoices", "/invoices/{job_id}"]
+    assert list(schema["paths"]) == [
+        "/health",
+        "/invoices",
+        "/invoices/{job_id}",
+        "/invoices/{job_id}/file",
+    ]
 
 
 @pytest.mark.anyio

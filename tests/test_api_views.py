@@ -166,7 +166,9 @@ def test_fields_suggestions_and_the_issues_followed_from_pass_through() -> None:
 def test_an_issue_message_comes_from_the_wording_table_when_one_is_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(messages.ISSUE_TEXTS, "tax", lambda i: f"Tax on page {i.page} is off.")
+    monkeypatch.setitem(
+        messages.ISSUE_TEXTS, "tax", lambda i, line: f"Tax on page {i.page} is off."
+    )
     issues = [Issue("tax", "raw", page=2), Issue("doc_sums", "kept as the flow wrote it")]
     out = dumped(result_view(result(TWO_PAGES, issues=issues)))["issues"]
     assert [i["message"] for i in out] == ["Tax on page 2 is off.", "kept as the flow wrote it"]

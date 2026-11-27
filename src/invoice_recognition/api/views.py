@@ -277,14 +277,17 @@ def _line(index: int, line: Line) -> JSONObject:
     return {"index": index} | {k: v for k, v in clean.items() if k != "index"}
 
 
-def _issue(id_: int, issue: Issue) -> JSONObject:
-    # From the issue's JSON: keys an issue does not carry (yet) take their defaults.
+def _issue(id_: int, issue: Issue, lines: list[JSONObject]) -> JSONObject:
+    # From the issue's JSON: keys an issue does not carry (yet) take their defaults. The
+    # message is worded with the line it is about, as the view shows it (JSON-safe).
     raw: JSONObject = _json(issue.to_json())
+    at = issue.line
+    line = lines[at] if isinstance(at, int) and 0 <= at < len(lines) else None
     return {
         "id": id_,
         "code": raw["check"],
         "severity": raw.get("severity", "error"),
-        "message": _utf8(messages.issue_text(issue)),
+        "message": _utf8(messages.issue_text(issue, line)),
         "line_index": raw.get("line"),
         "line_no": raw.get("line_no"),
         "page": raw.get("page"),
@@ -380,10 +383,11 @@ def result_view(result: Result) -> ResultView:
     """The result of a finished job as the API shows it. Raises (pydantic's
     ValidationError) when the result holds something that is not JSON."""
     attempts = _attempts(_json(result.to_json()))
+    lines = [_line(i, line) for i, line in enumerate(result.lines)]
     view = {
         "header": _json(result.header),
-        "lines": [_line(i, line) for i, line in enumerate(result.lines)],
-        "issues": [_issue(k, issue) for k, issue in enumerate(result.issues)],
+        "lines": lines,
+        "issues": [_issue(k, issue, lines) for k, issue in enumerate(result.issues)],
         "notes": [_note(n) for n in result.notes] + _repair_notes(result.lines),
         "checkpoints": [_json(c) for c in result.checkpoints],
         "pages": [

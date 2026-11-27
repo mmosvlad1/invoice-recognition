@@ -40,6 +40,12 @@ def test_page_beyond_the_end_is_an_error() -> None:
         extract_pages(make_pdf(THREE), [4])
 
 
+@pytest.mark.parametrize("pages", [[0], [-1], [1, 0]])
+def test_page_below_1_is_an_error_not_a_page_from_the_end(pages: list[int]) -> None:
+    with pytest.raises(IndexError, match="page 0|page -1"):
+        extract_pages(make_pdf(THREE), pages)
+
+
 def test_extracted_bytes_are_deterministic() -> None:
     # The flow sends each page as its own PDF: the same document must give the
     # same request body every time.

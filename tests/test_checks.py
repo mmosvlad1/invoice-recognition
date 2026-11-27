@@ -381,3 +381,24 @@ def test_non_finite_numbers_from_the_model_do_not_crash_the_checks() -> None:
     assert check_grounding(doc, ev) == []  # the sku and the known numbers are on one row
     assert check_header_grounding(doc, ev) == []
     assert check_coverage(doc, ev) == []
+
+
+# --------------------------------------------------------------------------- #
+# Numbers too long for cents
+# --------------------------------------------------------------------------- #
+
+HUGE = "1" + "0" * 28  # 1E+28: 29 digits before the point
+
+
+def test_line_math_and_tax_with_a_number_too_long_for_cents() -> None:
+    big = line(1) | {"quantity": 1, "unit_price": HUGE, "amount": HUGE}
+    assert check_line_math({"lines": [big]}) == []
+    wrong = big | {"amount": "2" + "0" * 28}
+    (issue,) = check_line_math({"lines": [wrong]})
+    assert issue.message == (
+        "1 x 10000000000000000000000000000 = 1.000000000000000000000000000E+28,"
+        " but amount is 20000000000000000000000000000"
+    )
+    assert messages(check_tax({"header": {"tax_total": 1}, "lines": [big]})) == [
+        "tax computed from lines is 2000000000000000000000000000, invoice says 1"
+    ]

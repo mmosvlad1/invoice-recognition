@@ -23,7 +23,17 @@ _TRIM = ".,;:()[]"
 
 
 def money(x: Decimal) -> Decimal:
-    return x.quantize(CENT, rounding=ROUND_HALF_UP)
+    """`x` rounded half up to cents.
+
+    A finite number with 27 or more digits before the point cannot carry cents
+    within the 28-digit precision of decimal arithmetic (quantize raises), and
+    its cents are lost to that precision anyway: it is returned as it is."""
+    try:
+        return x.quantize(CENT, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        if not x.is_finite():
+            raise
+        return x
 
 
 def parse_number(token: str, locale: str) -> Decimal | None:

@@ -1,6 +1,6 @@
 """The text-layer witness: printed numbers, item rows, number format."""
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import pytest
 
@@ -76,6 +76,20 @@ def test_printed_forms_need_a_finite_number(value: str) -> None:
         printed_forms(Decimal(value))
 
 
+def test_money_leaves_a_number_too_long_for_cents_as_it_is() -> None:
+    # 28 significant digits is the precision of decimal arithmetic: 26 digits
+    # before the point still fit with cents, 27 do not.
+    assert money(Decimal("12345678901234567890123456.785")) == Decimal(
+        "12345678901234567890123456.79"
+    )
+    assert money(Decimal("123456789012345678901234567.8")) == Decimal(
+        "123456789012345678901234567.8"
+    )
+    assert money(Decimal("1E+30")) == Decimal("1E+30")
+    with pytest.raises(InvalidOperation):
+        money(Decimal("Infinity"))  # not finite: still an error
+
+
 # --------------------------------------------------------------------------- #
 # Item rows and the number format
 # --------------------------------------------------------------------------- #
@@ -119,6 +133,12 @@ def test_locale_is_the_one_under_which_more_rows_multiply_out() -> None:
     us_rows = ["X-1 Panel 3 1,234.50 3,703.50", "X-2 Tape 2.5 4.00 10.00"]
     us = build(["\n".join(us_rows)], "text_layer")
     assert us.locale == "us" and len(us.pages[0].item_rows) == 2
+
+
+def test_row_with_a_very_long_number_is_not_an_item_row() -> None:
+    # An account number times a date read as a number is far too long for cents.
+    ev = build(["Konto 61109010140000071219812874 27.11.2026 3"], "text_layer")
+    assert ev.pages[0].item_rows == []
 
 
 def test_locale_is_us_on_a_tie() -> None:

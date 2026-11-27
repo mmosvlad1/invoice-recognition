@@ -220,7 +220,7 @@ class _Closing(httpx.AsyncByteStream):
             self.on_close()
 
 
-def run(data: bytes, mime: str, server: Handler, cfg: Config | None = None) -> Result:
+def run(data: bytes, mime: str, server: Handler | SlowServer, cfg: Config | None = None) -> Result:
     """process() on one file, with every request answered by `server`."""
 
     async def go() -> Result:

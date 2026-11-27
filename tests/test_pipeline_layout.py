@@ -4,6 +4,7 @@ page and the fallback to reading every page by the model. Fake OpenRouter, no ne
 import asyncio
 import io
 import json
+import time
 
 import httpx
 import pytest
@@ -338,3 +339,16 @@ def test_witness_that_failed_on_a_page_the_code_read_well_needs_no_stronger_mode
     res = run(data, "application/pdf", Server(header, failing, saved_layout("l_classic")))
     assert res.layout["status"] == "unverified" and res.pages[0].method == "layout"
     assert [n for n in res.notes if n["source"] == "retry"] == []
+
+
+@pytest.mark.parametrize("rate", ["1e999999", "1e5000"])
+def test_absurd_document_rate_in_the_layout_answer_is_no_rate(rate: str) -> None:
+    # The rate becomes the tax_rate of every row found by code: unbounded, "1e999999"
+    # hung process() in int() and "1e5000" made a result JSON could not write.
+    data, _, header, pages = truth_doc("s_classic")
+    layout = saved_layout("s_classic") | {"tax": {"in_row": False, "document_rate": rate}}
+    started = time.monotonic()
+    res = run(data, "application/pdf", Server(header, answers(pages), layout))
+    assert time.monotonic() - started < 10
+    assert res.method == "layout" and all(item["tax_rate"] is None for item in res.lines)
+    json.dumps(res.to_json(), allow_nan=False)

@@ -389,3 +389,12 @@ def test_page_with_only_a_doubtful_document_issue_needs_no_stronger_model() -> N
     header = header_for(rows) | {"total": 1.0}  # the document does not add up, the page does
     res = run(scan(1), "application/pdf", Server(header, {1: [rows]}))
     assert "doc_sums" in codes(res.issues) and retry_notes(res) == []
+
+
+def test_numbers_of_absurd_size_do_not_crash_the_document() -> None:
+    rows = [line(1) | {"quantity": "1e999999"}, line(2)]
+    header = header_for(rows) | {"subtotal": "9e999999", "tax_total": "9e999999"}
+    res = run(scan(1), "application/pdf", Server(header, {1: [rows]}))
+    assert res.status == "needs_review" and len(res.lines) == 2  # the page is not lost
+    assert "page_read" not in codes(res.issues)
+    assert ("line_math", 0) in [(i.check, i.line) for i in res.issues]

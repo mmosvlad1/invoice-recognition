@@ -279,3 +279,22 @@ def test_layout_request_shows_the_page_and_the_top_of_the_next() -> None:
         + "\n"
     )
     assert lay.layout_request(pages, 2).endswith("8| next8\n")  # the last page: nothing added
+
+
+@pytest.mark.parametrize(
+    ("rate", "expected"),
+    [(20, Decimal(20)), ("7.5", Decimal("7.5")), (None, None), (True, None), ("n/a", None)]
+    + [("NaN", None), ("1e999999", None), ("1e5000", None)],
+)
+def test_document_rate_must_be_a_usable_number(rate: object, expected: Decimal | None) -> None:
+    got = lay.resolve(ANSWER | {"tax": {"in_row": False, "document_rate": rate}}, PAGE)
+    assert got.document_rate == expected
+
+
+def test_printed_number_of_absurd_length_is_not_a_number() -> None:
+    assert LAYOUT.number("1" * 101) == Decimal("1" * 101)
+    assert LAYOUT.number("1" * 102) is None  # 10^101 or more: beyond what checks.dec accepts
+    assert replace(LAYOUT, thousands="").number("0." + "1" * 101) is None
+    row = item(1, 1, "A-1", "Bolt", "2", "10.00", "1" * 5000)
+    parsed = parse_document([[row]], LAYOUT)
+    assert parsed.lines == [] and [n["kind"] for n in parsed.notes] == []

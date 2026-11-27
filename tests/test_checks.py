@@ -402,3 +402,13 @@ def test_line_math_and_tax_with_a_number_too_long_for_cents() -> None:
     assert messages(check_tax({"header": {"tax_total": 1}, "lines": [big]})) == [
         "tax computed from lines is 2000000000000000000000000000, invoice says 1"
     ]
+
+
+@pytest.mark.parametrize("breakdown", [5, True, "20%: 4.00", {"rate": 20, "base": 20, "tax": 4}])
+def test_tax_breakdown_that_is_not_a_list_is_no_breakdown(breakdown: object) -> None:
+    lines = [line(1)]  # 20.00 at 20 %
+    header = {"tax_breakdown": breakdown, "tax_total": 4.0}
+    assert check_tax({"header": header, "lines": lines}) == []
+    assert messages(check_tax({"header": header | {"tax_total": 9}, "lines": lines})) == [
+        "tax computed from lines is 4.00, invoice says 9"
+    ]

@@ -20,16 +20,24 @@ answer of a page read by the model has one more field, "carry_in", for the end o
 description printed at the top of the page. When all pages are read, code appends it
 to the last line item of the previous page. What was joined, and what found no row to
 go to, is in Result.notes; it raises no issue.
+
+A photo (any file that is not a PDF) is measured before the first request
+(quality.py): a cut sheet, blur, darkness, glare. A photo that cannot be read ends as
+"failed" with the reason and no request; a doubtful one is read and carries the
+reason as an issue.
 """
 
 import asyncio
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import asdict
+from dataclasses import fields as dataclass_fields
 from decimal import Decimal
 from typing import Any, cast
 
 import httpx
+from PIL import Image
 
 from invoice_recognition.llm import (
     ContentPart,
@@ -43,6 +51,7 @@ from invoice_recognition.recognition import carryover as co
 from invoice_recognition.recognition import checks, photo
 from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
+from invoice_recognition.recognition import quality as ql
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.pdf import extract_pages, page_count
@@ -427,6 +436,73 @@ def join_carried(pages: list[PageResult]) -> list[JSONObject]:
 
 
 # --------------------------------------------------------------------------- #
+# Photo quality
+# --------------------------------------------------------------------------- #
+
+
+def _photo_issue(r: ql.Reason, lim: ql.Limits) -> Issue:
+    """A reason of quality.py as an issue. The text for the user is Reason.message
+    (Result.quality); this one follows the other issues: with the number and the limit it
+    was held against."""
+    side = f" ({r.side} side)" if r.side else ""
+    reject = r.severity == "reject"
+    limit = lim.sharpness_reject if reject else lim.sharpness_warn
+    blurred = f"Text sharpness {r.value} is below {limit:g}." + (
+        "" if reject else " Numbers are usually still read; item codes (SKUs) may be misread."
+    )
+    no_text = (
+        f"No text was found in the photo ({r.value:.0f} word-like regions, "
+        f"at least {lim.min_boxes} needed)."
+        if r.value is not None
+        else ""
+    )
+    text = {
+        "no_text": no_text,
+        "text_at_edge": f"Text reaches the edge of the frame{side}, {r.value} text heights "
+        "from it: part of the document is outside the photo.",
+        "sheet_cut": f"The sheet runs out of the frame{side}; no text is near that edge.",
+        "sheet_edge_unseen": "No edge of the sheet is visible, so nothing confirms that the "
+        "whole document is in the photo.",
+        "blurred": blurred,
+        "dark": f"Paper brightness {r.value} of 255 is below {lim.paper_level:g}.",
+        "glare": f"Glare covers {(r.value or 0) * 100:.1f}% of the sheet.",
+        "text_small": f"Text lines are {r.value} px tall, below {lim.text_height_px:g}.",
+    }.get(r.code) or r.code
+    if reject:
+        text += " No request was sent."
+    return Issue(f"photo_{r.code}", text, page=1, severity="error" if reject else "warning")
+
+
+def _photo_quality(img: Image.Image, cfg: Config) -> tuple[JSONObject, list[Issue]]:
+    """Measure the photo as taken. Returns Result.quality and the issues for its reasons.
+    Never raises: a photo the check cannot measure is read the way every photo was read
+    before the check existed."""
+    try:
+        names = {f.name for f in dataclass_fields(ql.Limits)}
+        lim = ql.Limits(
+            **{
+                k[6:]: v
+                for k, v in asdict(cfg).items()
+                if k.startswith("photo_") and k[6:] in names
+            }
+        )
+        q, why = ql.check(img, lim)
+        verdict = (
+            "reject" if any(r.severity == "reject" for r in why) else ("warn" if why else "ok")
+        )
+        info = {
+            "verdict": verdict,
+            "reasons": [r.to_json() for r in why],
+            "measures": q.to_json(),
+            "limits": asdict(lim),
+        }
+        return info, [_photo_issue(r, lim) for r in why]
+    except Exception as e:  # fault boundary: the measurement itself broke
+        logger.warning("the photo could not be measured", exc_info=True)
+        return {"verdict": "unchecked", "error": f"{type(e).__name__}: {e}", "reasons": []}, []
+
+
+# --------------------------------------------------------------------------- #
 # Whole document
 # --------------------------------------------------------------------------- #
 
@@ -462,6 +538,8 @@ async def process(
     evidence: ev.Evidence | None = None
     text_pages: list[list[lay.TextLine]] | None = None  # set when the layout road is taken
     layout_info: JSONObject = {"status": "off", "reason": "not a PDF"}
+    quality: JSONObject = {}
+    photo_issues: list[Issue] = []
 
     def failed(issues: list[Issue]) -> Result:
         """Nothing was sent to a model: a result the caller can show, not a crash."""
@@ -478,14 +556,21 @@ async def process(
             cost_usd=0.0,
             prompt_tokens=0,
             completion_tokens=0,
+            quality=quality,
         )
 
     try:
         if mime != "application/pdf":
             # Any other file is a photo: one page, read as an image (photo.py).
             n = 1
-            parts = [photo.part(photo.load(data))]
-            header_part = parts[0]
+            img = photo.load(data)
+            if cfg.photo_quality:
+                # Before any request: on an unreadable photo the model does not answer
+                # "nothing", it invents rows.
+                quality, photo_issues = _photo_quality(img, cfg)
+            if quality.get("verdict") != "reject":
+                parts = [photo.part(img)]
+                header_part = parts[0]
         else:
             n = page_count(data)
             texts = ev.pdf_text_layer(data)
@@ -525,6 +610,8 @@ async def process(
     except Exception as e:  # fault boundary: a damaged or unsupported file
         logger.warning("file cannot be read", exc_info=True)
         return failed([Issue("unreadable_file", f"{type(e).__name__}: {e}")])
+    if quality.get("verdict") == "reject":
+        return failed(photo_issues)
 
     # The "carry_in" field is asked for only where a previous page can exist. A photo and
     # a one-page PDF keep the request they always had, to the byte.
@@ -682,7 +769,7 @@ async def process(
     if evidence is not None:
         issues += checks.check_header_grounding(doc, evidence)
 
-    issues += layout_issues
+    issues += layout_issues + photo_issues
 
     all_attempts = header_attempts + layout_attempts + [a for p in pages for a in p.attempts]
     status = "failed" if not lines or not header else ("needs_review" if issues else "ok")
@@ -704,4 +791,5 @@ async def process(
         layout=layout_info,
         layout_attempts=layout_attempts,
         notes=notes,
+        quality=quality,
     )

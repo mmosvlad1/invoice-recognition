@@ -69,6 +69,14 @@ class Result:
     #     carry_without_owner  - no row to append it to; nothing was changed: + "reason"
     #     carry_join_failed    - the join broke ("page" is None); nothing was changed
     notes: list[JSONObject] = field(default_factory=list)
+    # {} when nothing was measured: a PDF, or the check switched off (Config.photo_quality).
+    # Photo:
+    #   verdict  - ok | warn | reject | unchecked (the measurement itself broke; "error" says how)
+    #   reasons  - [{code, message (for the user), severity: reject | warn, value?, side?}]
+    #   measures - the numbers (quality.Quality.to_json); limits - the limits they were held
+    #              against
+    # Every reason is also in `issues` as photo_<code>.
+    quality: JSONObject = field(default_factory=dict)
 
     @property
     def method(self) -> str:
@@ -94,6 +102,7 @@ class Result:
             "method": self.method,
             "layout": self.layout,
             "notes": self.notes,
+            "quality": self.quality,
             "layout_attempts": [asdict(a) for a in self.layout_attempts],
             "pages": [
                 {

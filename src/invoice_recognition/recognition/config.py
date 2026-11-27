@@ -27,3 +27,20 @@ class Config:
     # page. A photo, a one-page PDF and the witness page of the layout road are asked with
     # EXTRACT_PAGE as before. False: EXTRACT_PAGE everywhere, no join.
     carry_in: bool = True
+    # Photo: the frame is measured before any request (quality.py). A reason of severity
+    # "reject" ends the document as "failed" with no request sent; a "warn" is read as
+    # usual and flagged.
+    photo_quality: bool = True  # False: no measurement, every photo goes to the model
+    # The limits below are quality.Limits under the same names; their basis is stated there.
+    # Sharpness is Quality.text_sharpness: on the text only, divided by paper brightness,
+    # frame as taken. 0 switches a limit off.
+    photo_sharpness_reject: float = 140.0
+    photo_sharpness_warn: float = 450.0
+    photo_paper_level: float = 150.0  # paper darker than this (0-255): warn "dark"
+    photo_glare: float = 0.01  # burnt-out spot larger than this share of the sheet: warn
+    # The sheet covers more than this share of a frame side: it runs out of the frame there ...
+    photo_sheet_touch: float = 0.005
+    # ... and text is closer to that side than this many text heights: reject, else warn.
+    photo_text_margin_cut: float = 1.5
+    # No sheet edge visible at all: text this close to the frame border rejects.
+    photo_text_margin_unseen: float = 0.5

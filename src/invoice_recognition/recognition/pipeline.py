@@ -39,7 +39,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
 from decimal import Decimal
 from typing import Any, cast
@@ -646,50 +646,50 @@ async def read_header(
     return header, attempts
 
 
-async def process(
-    data: bytes,
-    mime: str,
-    client: httpx.AsyncClient,
-    cfg: Config | None = None,
-    on_page: Callable[[PageResult], None] | None = None,
-) -> Result:
-    """Read one invoice file. Never raises for a bad file or a bad answer: those end
-    up in Result.issues and Result.status.
+@dataclass
+class Prepared:
+    """A file made ready for the model: everything process() works out before its first
+    request. prepare() builds it from the bytes, with all the heavy local work (pypdf,
+    pdfium, Pillow, OpenCV); the reading that follows gets only this, never the bytes or
+    an image."""
 
-    on_page is called once per page, in its final form, as soon as it is settled."""
-    cfg = cfg or Config()
-    started = time.monotonic()
-    sem = asyncio.Semaphore(cfg.concurrency)
+    mime: str
+    n: int = 0  # pages
+    evidence: ev.Evidence | None = None  # the text layer, when the document has its own
+    text_pages: list[list[lay.TextLine]] | None = None  # set when the layout road is taken
+    layout_info: JSONObject = field(default_factory=dict)
+    quality: JSONObject = field(default_factory=dict)
+    photo_issues: list[Issue] = field(default_factory=list)
+    # Pages of a scan that are not sent to the model: "empty" | "reject".
+    skipped: dict[int, str] = field(default_factory=dict)
+    scan_issues: dict[int, list[Issue]] = field(default_factory=dict)  # by page
+    scan_notes: list[JSONObject] = field(default_factory=list)
+    parts: list[ContentPart] = field(default_factory=list)  # one per page
+    header_part: ContentPart | None = None
+    # Nothing is to be sent: (issues, notes) of the failed result - a damaged file, a
+    # rejected photo, a scan with no page left to read.
+    failure: tuple[list[Issue], list[JSONObject]] | None = None
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.mime == "application/pdf"
+
+
+def prepare(data: bytes, mime: str, cfg: Config) -> Prepared:
+    """Open the file, measure it and cut it into the parts sent to the model. Never
+    raises for a bad file: Prepared.failure says why nothing can be sent."""
+    n = 0
     evidence: ev.Evidence | None = None
     text_pages: list[list[lay.TextLine]] | None = None  # set when the layout road is taken
     layout_info: JSONObject = {"status": "off", "reason": "not a PDF"}
     quality: JSONObject = {}
     photo_issues: list[Issue] = []
-    skipped: dict[
-        int, str
-    ] = {}  # pages of a scan that are not sent to the model: "empty" | "reject"
+    # Pages of a scan that are not sent to the model: "empty" | "reject".
+    skipped: dict[int, str] = {}
     scan_issues: dict[int, list[Issue]] = {}  # by page
     scan_notes: list[JSONObject] = []
-
-    def failed(issues: list[Issue], notes: list[JSONObject] | None = None) -> Result:
-        """Nothing was sent to a model: a result the caller can show, not a crash."""
-        return Result(
-            status="failed",
-            header={},
-            lines=[],
-            checkpoints=[],
-            issues=issues,
-            pages=[],
-            evidence_source=None,
-            duration_s=time.monotonic() - started,
-            calls=0,
-            cost_usd=0.0,
-            prompt_tokens=0,
-            completion_tokens=0,
-            quality=quality,
-            notes=notes or [],
-        )
-
+    parts: list[ContentPart] = []
+    header_part: ContentPart | None = None
     try:
         if mime != "application/pdf":
             # Any other file is a photo: one page, read as an image (photo.py).
@@ -746,10 +746,11 @@ async def process(
                 header_part = file_part(extract_pages(data, header_pages), mime, "header.pdf")
     except Exception as e:  # fault boundary: a damaged or unsupported file
         logger.warning("file cannot be read", exc_info=True)
-        return failed([Issue("unreadable_file", f"{type(e).__name__}: {e}")])
+        failure = [Issue("unreadable_file", f"{type(e).__name__}: {e}")]
+        return Prepared(mime, quality=quality, failure=(failure, []))
     if quality.get("verdict") == "reject":
         if mime != "application/pdf":
-            return failed(photo_issues)
+            return Prepared(mime, quality=quality, failure=(photo_issues, []))
         # A scan with no page left to read: every page that has text is too blurred, or no
         # page has text at all.
         unread = [i for p in sorted(scan_issues) for i in scan_issues[p]]
@@ -761,11 +762,79 @@ async def process(
                     severity="error",
                 )
             )
-        return failed(unread, scan_notes)
+        return Prepared(mime, quality=quality, failure=(unread, scan_notes))
+    return Prepared(
+        mime,
+        n=n,
+        evidence=evidence,
+        text_pages=text_pages,
+        layout_info=layout_info,
+        quality=quality,
+        photo_issues=photo_issues,
+        skipped=skipped,
+        scan_issues=scan_issues,
+        scan_notes=scan_notes,
+        parts=parts,
+        header_part=header_part,
+    )
+
+
+async def process(
+    data: bytes,
+    mime: str,
+    client: httpx.AsyncClient,
+    cfg: Config | None = None,
+    on_page: Callable[[PageResult], None] | None = None,
+) -> Result:
+    """Read one invoice file. Never raises for a bad file or a bad answer: those end
+    up in Result.issues and Result.status.
+
+    on_page is called once per page, in its final form, as soon as it is settled."""
+    cfg = cfg or Config()
+    started = time.monotonic()
+    prep = prepare(data, mime, cfg)
+    if prep.failure is not None:
+        # Nothing was sent to a model: a result the caller can show, not a crash.
+        issues, notes = prep.failure
+        return Result(
+            status="failed",
+            header={},
+            lines=[],
+            checkpoints=[],
+            issues=issues,
+            pages=[],
+            evidence_source=None,
+            duration_s=time.monotonic() - started,
+            calls=0,
+            cost_usd=0.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            quality=prep.quality,
+            notes=notes,
+        )
+    return await _read(prep, client, cfg, on_page, started)
+
+
+async def _read(
+    prep: Prepared,
+    client: httpx.AsyncClient,
+    cfg: Config,
+    on_page: Callable[[PageResult], None] | None,
+    started: float,
+) -> Result:
+    """Send the parts of a prepared file to the model, check what comes back and build the
+    result. Pure Python on extracted text and model answers: no file is opened here."""
+    sem = asyncio.Semaphore(cfg.concurrency)
+    n, evidence, text_pages, layout_info = prep.n, prep.evidence, prep.text_pages, prep.layout_info
+    quality, photo_issues, skipped = prep.quality, prep.photo_issues, prep.skipped
+    scan_issues, scan_notes, parts = prep.scan_issues, prep.scan_notes, prep.parts
+    if prep.header_part is None:  # prepare() leaves it out only with a failure
+        raise ValueError("no page of the document is sent to the model")
+    header_part = prep.header_part
 
     # The "carry_in" field is asked for only where a previous page can exist. A photo and
     # a one-page PDF keep the request they always had, to the byte.
-    carry = cfg.carry_in and mime == "application/pdf" and n > 1
+    carry = cfg.carry_in and prep.is_pdf and n > 1
 
     async def one(p: int, announce: bool = True, with_carry: bool | None = None) -> PageResult:
         if p in skipped:  # a page of a scan that is blank or too blurred to read: no request

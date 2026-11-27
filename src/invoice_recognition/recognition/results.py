@@ -1,0 +1,77 @@
+"""What the flow returns: every attempt at a request, every page, the document."""
+
+from dataclasses import asdict, dataclass, field
+
+from invoice_recognition.recognition.checks import Issue
+from invoice_recognition.shapes import Checkpoint, Header, JSONObject, Line
+
+
+@dataclass
+class Attempt:
+    """One request to the model and what came of it."""
+
+    model: str
+    duration_s: float
+    cost_usd: float
+    prompt_tokens: int
+    completion_tokens: int
+    lines: int
+    issues: int
+    error: str | None = None
+    # False: the request ended without a reported cost; cost_usd is then 0.0, not the real price.
+    cost_known: bool = True
+
+
+@dataclass
+class PageResult:
+    page: int
+    lines: list[Line] = field(default_factory=list)
+    totals: list[Checkpoint] = field(default_factory=list)  # after_line is local to the page
+    issues: list[Issue] = field(default_factory=list)
+    attempts: list[Attempt] = field(default_factory=list)
+    repaired: int = 0
+
+
+@dataclass
+class Result:
+    status: str  # ok | needs_review | failed
+    header: Header
+    lines: list[Line]
+    checkpoints: list[Checkpoint]
+    issues: list[Issue]
+    pages: list[PageResult]
+    evidence_source: str | None
+    duration_s: float
+    calls: int
+    cost_usd: float
+    prompt_tokens: int
+    completion_tokens: int
+    header_attempts: list[Attempt] = field(default_factory=list)
+    cost_unknown_calls: int = 0  # requests whose cost was not reported; cost_usd leaves them out
+
+    def to_json(self) -> JSONObject:
+        return {
+            "status": self.status,
+            "header": self.header,
+            "lines": self.lines,
+            "checkpoints": self.checkpoints,
+            "issues": [i.to_json() for i in self.issues],
+            "evidence_source": self.evidence_source,
+            "duration_s": self.duration_s,
+            "calls": self.calls,
+            "cost_usd": self.cost_usd,
+            "cost_unknown_calls": self.cost_unknown_calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "header_attempts": [asdict(a) for a in self.header_attempts],
+            "pages": [
+                {
+                    "page": p.page,
+                    "lines": len(p.lines),
+                    "repaired": p.repaired,
+                    "issues": [i.to_json() for i in p.issues],
+                    "attempts": [asdict(a) for a in p.attempts],
+                }
+                for p in self.pages
+            ],
+        }

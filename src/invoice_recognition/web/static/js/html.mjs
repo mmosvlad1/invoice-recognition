@@ -4,7 +4,18 @@
 // untrusted text; this is what keeps them text.
 
 import { STATUS_LABEL, clock, count, dollars, plural, seconds, size, value } from "./format.mjs";
-import { listResult, passedNote, placeIssues, progressShare, stateOf, summaryTitle } from "./model.mjs";
+import {
+  acceptedValues,
+  choices,
+  decidedText,
+  listResult,
+  openCount,
+  passedNote,
+  placeIssues,
+  progressShare,
+  stateOf,
+  summaryTitle,
+} from "./model.mjs";
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const MADE_HERE = Symbol("html");
@@ -125,27 +136,34 @@ export const withBack = (content) => html`<section class="review">
 /** The 404 view: the server's sentence and the way back. */
 export const notFound = (detail) => withBack(html`<div class="empty">${detail}</div>`);
 
-const headerDoubt = (result, review) =>
-  new Set(
-    result.issues
-      .filter((i) => stateOf(review, i.id) === "open")
-      .flatMap((i) => i.fields ?? [])
-      .filter((f) => f.startsWith("header.")),
-  );
+/** Header fields in doubt (open issues) and checked (decided ones). */
+function headerMarks(result, review) {
+  const doubt = new Set();
+  const checked = new Set();
+  for (const issue of result.issues) {
+    const fields = (issue.fields ?? []).filter((f) => f.startsWith("header."));
+    const into = stateOf(review, issue.id) === "open" ? doubt : checked;
+    for (const f of fields) into.add(f === "header.tax_breakdown" ? "header.tax_total" : f); // shown with the tax
+  }
+  return { doubt, checked };
+}
 
-/** The header strip: who, which invoice, the totals; amber where an open issue doubts it. */
+/** The header strip: who, which invoice, the totals; amber where an open issue doubts a
+ * value, green where a person decided on it. */
 export function headerFields(result, review) {
   const h = result.header ?? {};
-  const doubt = headerDoubt(result, review);
+  const { doubt, checked } = headerMarks(result, review);
+  const accepted = acceptedValues(result, review).header;
   const rates = Array.isArray(h.tax_breakdown)
     ? h.tax_breakdown.filter((t) => t && typeof t === "object").map((t) => value("line.tax_rate", t.rate))
     : [];
-  if (doubt.has("header.tax_breakdown")) doubt.add("header.tax_total"); // the table is shown with the tax
   const cell = (key, label, sub = null, cls = "") => {
     const field = `header.${key}`;
-    return html`<div class="${cls}${doubt.has(field) ? " doubt" : ""}"><dt>${label}</dt><dd>${value(field, h[key])}${
-      sub && html`<span class="sub">${sub}</span>`
-    }</dd></div>`;
+    const mark = doubt.has(field) ? " doubt" : checked.has(field) ? " checked" : "";
+    const shown = accepted.has(key)
+      ? html`${value(field, accepted.get(key), { numeric: true })}<span class="was">${value(field, h[key])}</span>`
+      : value(field, h[key]);
+    return html`<div class="${cls}${mark}"><dt>${label}</dt><dd>${shown}${sub && html`<span class="sub">${sub}</span>`}</dd></div>`;
   };
   return html`${cell("supplier_name", "Supplier", h.supplier_tax_id != null && `Tax ID ${value("header.supplier_tax_id", h.supplier_tax_id)}`)}
     ${cell("invoice_number", "Invoice no.")}${cell("invoice_date", "Date")}${cell("currency", "Currency")}
@@ -185,9 +203,20 @@ export function failedPanel(job) {
       ${cost && html`<p class="fine">${cost}</p>`}
     </div>
     ${lines.length > 0 && html`<details class="read-before"><summary>Rows read before it stopped (${count(lines.length)})</summary>
-      <div class="rows">${rowsHead}${rowList(lines, { rows: new Map(), children: new Map() }, null, null)}</div></details>`}
+      <div class="rows">${rowsHead}${rowList(lines, readOnly(result))}</div></details>`}
     ${result && details(result)}`;
 }
+
+/** The context of rows shown without issues or decisions. */
+const readOnly = (result) => ({
+  result,
+  review: null,
+  placed: { rows: new Map(), children: new Map() },
+  accepted: { lines: new Map(), header: new Map() },
+  pending: new Set(),
+  errors: new Map(),
+  selected: null,
+});
 
 const rowsHead = html`<div class="rows-head" aria-hidden="true">
   <span class="h-sku">Item code</span><span>Description</span><span class="num">Qty</span><span class="h-unit">Unit</span>
@@ -203,69 +232,104 @@ const COLUMNS = [
   ["amount", "num amount"],
 ];
 
-function cells(line, issues, review) {
-  const doubt = new Set(
-    issues.filter((i) => stateOf(review, i.id) === "open").flatMap((i) => i.fields ?? []),
-  );
+/**
+ * What the builders of the result share: the job's result and review, where each issue
+ * is shown, the values accepted, and the decisions waiting for the server (`pending`:
+ * issue ids) or refused by it (`errors`: issue id -> sentence).
+ * @typedef {{result: any, review: any, placed: any, accepted: any, pending: Set<number>, errors: Map<number, string>, selected: number | null}} Context
+ */
+
+function cells(line, issues, ctx) {
+  const doubt = new Set(issues.filter((i) => stateOf(ctx.review, i.id) === "open").flatMap((i) => i.fields ?? []));
+  const accepted = ctx.accepted.lines.get(line.index);
   return COLUMNS.map(([key, cls]) => {
-    const text = value(`line.${key}`, line[key]);
+    const field = `line.${key}`;
+    const text = value(field, line[key]);
+    if (accepted?.has(key)) {
+      return html`<span class="cell ${cls} fixed"><span>${value(field, accepted.get(key), { numeric: true })}</span><span class="was">${text}</span></span>`;
+    }
     if (key === "description") return html`<span class="cell desc" title="${text}">${text}</span>`;
-    if (doubt.has(`line.${key}`)) return html`<span class="cell ${cls} doubt" title="In doubt"><span>${text}</span></span>`;
+    if (doubt.has(field)) return html`<span class="cell ${cls} doubt" title="In doubt"><span>${text}</span></span>`;
     return html`<span class="cell ${cls}">${text}</span>`;
   });
 }
 
-function follows(child, review) {
-  if (stateOf(review, child.id) === "settled") {
+function follows(child, ctx) {
+  if (stateOf(ctx.review, child.id) === "settled") {
     return html`<p class="follows is-settled">${ICON_OK}<span>Settled by the amount accepted above: ${child.message}</span></p>`;
   }
   return html`<p class="follows"><span><span class="follows-label">This also explains:</span> ${child.message}</span></p>`;
 }
 
-function why(issue, placed, review) {
-  const children = placed.children.get(issue.id) ?? [];
+/** The buttons of an issue, or what was decided and "Undo"; a refusal under them. */
+function decision(issue, ctx) {
+  const entry = ctx.review?.issues?.[issue.id];
+  const error = ctx.errors.get(issue.id);
+  const busy = ctx.pending.has(issue.id);
+  const refusal = error && html`<p class="issue-error" role="alert">${error}</p>`;
+  if (!ctx.review || !entry || entry.state === "settled") return refusal;
+  if (entry.state !== "open") {
+    return html`<p class="resolved-note">${ICON_OK}<span>${decidedText(issue, entry)}</span>
+      <button class="btn btn-quiet" type="button" data-undo="${issue.id}" data-focus="undo-${issue.id}"${busy && html` disabled`}>Undo</button></p>${refusal}`;
+  }
+  const { intro, buttons } = choices(issue, ctx.result);
+  return html`${intro && html`<p class="choice-intro">${intro}</p>`}<div class="why-actions">${buttons.map(
+    (b, n) => html`<button class="btn ${b.primary ? "btn-accept" : "btn-keep"}" type="button" data-issue="${issue.id}"
+      data-body="${JSON.stringify(b.body)}" data-focus="choice-${issue.id}-${n}"${busy && html` disabled`}>${b.label}${
+        b.tag && html`<span class="agrees">${b.tag}</span>`
+      }</button>`,
+  )}</div>${refusal}`;
+}
+
+function why(issue, ctx) {
   return html`<div class="why">
     <p class="why-text">${ICON_WARN}<span>${issue.message}</span></p>
-    ${children.map((child) => follows(child, review))}
+    ${(ctx.placed.children.get(issue.id) ?? []).map((child) => follows(child, ctx))}
+    ${decision(issue, ctx)}
   </div>`;
 }
 
-function row(line, issues, placed, review, selected) {
+function row(line, issues, ctx) {
   const problem = issues.length > 0;
+  const done = problem && issues.every((i) => stateOf(ctx.review, i.id) !== "open");
   const label = `Row on page ${line.page ?? "unknown"}: ${value("line.sku", line.sku)} ${value("line.description", line.description)}. Show on the page`;
-  return html`<div class="row${problem ? " problem" : ""}${line.index === selected ? " is-selected" : ""}" data-line="${line.index}">
-    <div class="row-main" tabindex="0" role="button" data-focus="row-${line.index}" aria-label="${label}">${cells(line, issues, review)}</div>
-    ${issues.map((issue) => why(issue, placed, review))}
+  const cls = `row${problem ? " problem" : ""}${done ? " is-resolved" : ""}${line.index === ctx.selected ? " is-selected" : ""}`;
+  return html`<div class="${cls}" data-line="${line.index}">
+    <div class="row-main" tabindex="0" role="button" data-focus="row-${line.index}" aria-label="${label}">${cells(line, issues, ctx)}</div>
+    ${issues.map((issue) => why(issue, ctx))}
   </div>`;
 }
 
-function rowList(lines, placed, review, selected) {
+function rowList(lines, ctx) {
   let page;
   return lines.map((line) => {
     const separator = line.page !== page && line.page != null && html`<p class="page-sep">Page ${line.page}</p>`;
     page = line.page;
-    return html`${separator}${row(line, placed.rows.get(line.index) ?? [], placed, review, selected)}`;
+    return html`${separator}${row(line, ctx.placed.rows.get(line.index) ?? [], ctx)}`;
   });
 }
 
-function card(issue, placed, review) {
+function card(issue, ctx) {
   const where = issue.page != null ? `Page ${issue.page}` : "Document";
-  return html`<div class="docissue" data-issue="${issue.id}">
+  const done = stateOf(ctx.review, issue.id) !== "open";
+  return html`<div class="docissue${done ? " is-resolved" : ""}" data-card="${issue.id}">
     <button class="docissue-title" type="button" data-page="${issue.page ?? ""}" data-focus="card-${issue.id}">${ICON_WARN} ${where}</button>
     <p>${issue.message}</p>
-    ${(placed.children.get(issue.id) ?? []).map((child) => follows(child, review))}
+    ${(ctx.placed.children.get(issue.id) ?? []).map((child) => follows(child, ctx))}
+    ${decision(issue, ctx)}
   </div>`;
 }
 
 /** The right pane of a read document: summary, cards, rows, details. */
-export function resultPane(job, { showAll, selected }) {
-  const result = job.result;
-  const review = job.review;
+export function resultPane(job, { showAll, selected, pending = new Set(), errors = new Map() }) {
+  const { result, review } = job;
   const placed = placeIssues(result, review);
+  const ctx = { result, review, placed, accepted: acceptedValues(result, review), pending, errors, selected };
   const total = result.lines.length;
   const shown = showAll ? result.lines : result.lines.filter((l) => placed.rows.has(l.index));
   const hidden = total - placed.rows.size;
   const ok = result.issues.length === 0;
+  const allChecked = !ok && openCount(result, review) === 0;
   const note = ok
     ? `${plural(total, "row")} read. Every row, the tax table and the totals match, and nothing needs a look.`
     : passedNote(total, hidden, showAll);
@@ -275,8 +339,9 @@ export function resultPane(job, { showAll, selected }) {
       <div><button class="switch" type="button" role="switch" aria-checked="${String(showAll)}" id="toggle-all" data-focus="toggle-all">
         <span class="track"></span><span>Show all ${plural(total, "row")}</span></button></div>
     </div>
-    ${placed.cards.map((issue) => card(issue, placed, review))}
-    ${shown.length > 0 && html`<div class="rows" id="rows">${rowsHead}${rowList(shown, placed, review, selected)}</div>`}
+    ${placed.cards.map((issue) => card(issue, ctx))}
+    ${shown.length > 0 && html`<div class="rows" id="rows">${rowsHead}${rowList(shown, ctx)}</div>`}
+    ${allChecked && html`<p class="allclear">Every flagged value has been checked. Nothing else needs a look.</p>`}
     ${details(result)}`;
 }
 

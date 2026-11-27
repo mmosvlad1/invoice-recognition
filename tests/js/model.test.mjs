@@ -214,3 +214,66 @@ test("the row under a point of the document", () => {
   assert.equal(model.lineAt(PLACED, 3, 60, A4), null);
   assert.equal(model.rowBox(PLACED.lines[2], PLACED, A4), null);
 });
+
+// ------------------------------------------------------------------ decisions
+
+const labels = (c) => c.buttons.map((b) => [b.label, b.body, b.primary, b.tag]);
+const READ = { lines: [{ index: 0, page: 1, sku: "SG-54O66", quantity: 12, amount: 344.34 }], header: { total: "1,000.00" } };
+
+test("several items: one button each, the one that agrees primary and tagged, then keep", () => {
+  const c = model.choices({ id: 0, line_index: 0, suggestions: ITEMS }, READ);
+  assert.equal(c.intro, null);
+  assert.deepEqual(labels(c), [
+    ["Set quantity to 9", { action: "accept", suggestion: 0 }, false, null],
+    ["Set price to 19.13", { action: "accept", suggestion: 1 }, false, null],
+    ["Set amount to 688.68", { action: "accept", suggestion: 2 }, true, "matches the subtotal"],
+    ["Keep as read", { action: "keep" }, false, null],
+  ]);
+});
+
+test("one item with one cell: accept it or keep the value as read", () => {
+  const c = model.choices({ id: 0, line_index: 0, suggestions: [ITEMS[2]] }, READ);
+  assert.deepEqual(labels(c), [
+    ["Accept 688.68", { action: "accept", suggestion: 0 }, true, null],
+    ["Keep 344.34", { action: "keep" }, false, null],
+  ]);
+  const header = model.choices({ id: 1, line_index: null, suggestions: [{ set: { "header.total": 1200 }, source: "x" }] }, READ);
+  assert.deepEqual(header.buttons.map((b) => b.label), ["Accept 1,200.00", "Keep 1,000.00"]); // the header's text as read
+});
+
+test("a second reading of several cells is named, then accepted whole or kept", () => {
+  const item = { set: { "line.sku": "SG-54066", "line.quantity": 12 }, source: "second_reading" };
+  const c = model.choices({ id: 0, line_index: 0, suggestions: [item] }, READ);
+  assert.equal(c.intro, "Second reading: item code SG-54066 · quantity 12");
+  assert.deepEqual(c.buttons.map((b) => b.label), ["Accept the second reading", "Keep as read"]);
+});
+
+test("no item: the one button says it was checked; a broken item is not offered", () => {
+  for (const suggestions of [[], [{ set: null }], [{ set: [1] }]]) {
+    assert.deepEqual(labels(model.choices({ id: 0, line_index: null, suggestions }, READ)), [["Mark as checked", { action: "keep" }, false, null]]);
+  }
+  const mixed = model.choices({ id: 0, line_index: 0, suggestions: [{ set: null }, ITEMS[2]] }, READ);
+  assert.deepEqual(mixed.buttons[0].body, { action: "accept", suggestion: 1 }); // k is the item's place in the list
+});
+
+test("what a decided issue says", () => {
+  const withItems = { suggestions: ITEMS };
+  assert.equal(model.decidedText(withItems, decided(0, "accepted", 2)), "Accepted amount 688.68");
+  assert.equal(model.decidedText(withItems, decided(0, "kept")), "Kept as read");
+  assert.equal(model.decidedText({ suggestions: [] }, decided(1, "kept")), "Marked as checked");
+});
+
+test("the values accepted, by line and in the header", () => {
+  const r = review(decided(0, "accepted", 2));
+  const accepted = model.acceptedValues(RESULT, r);
+  assert.deepEqual([...accepted.lines.get(58)], [["amount", 688.68]]);
+  assert.equal(accepted.header.size, 0);
+  assert.equal(model.acceptedValues(RESULT, null).lines.size, 0);
+});
+
+test("once a value is accepted, only the cells it set are framed", () => {
+  const line = { id: 0, line_index: 0, fields: ["line.quantity", "line.unit_price", "line.amount"], suggestions: ITEMS };
+  assert.deepEqual(model.framedFields(line, null), line.fields);
+  assert.deepEqual(model.framedFields(line, review(decided(0, "accepted", 2))), ["line.amount"]);
+  assert.deepEqual(model.framedFields(line, review(decided(0, "kept"))), line.fields);
+});

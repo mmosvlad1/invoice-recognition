@@ -1,7 +1,7 @@
 // What the page decides from the API's answers: texts, counts, rules. Pure: no DOM, no
 // requests, so every rule here is tested without a browser.
 
-import { plural } from "./format.mjs";
+import { fieldName, plural, value } from "./format.mjs";
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const TOO_LARGE = "The file is larger than the limit of 10 MB.";
@@ -160,6 +160,97 @@ export function finishedText(job) {
   if (job.status === "failed") return `Reading failed: ${job.error?.message ?? "the document could not be read."}`;
   const n = job.result?.issues.length ?? 0;
   return `Reading finished: ${n ? plural(n, "issue") : "everything adds up"}.`;
+}
+
+// ------------------------------------------------------------------ decisions
+
+const cellsOf = (item) => (item?.set && typeof item.set === "object" && !Array.isArray(item.set) ? Object.entries(item.set) : []);
+const suggested = ([key, v]) => value(key, v, { numeric: true });
+
+/** The value of a cell as read: `line.X` of the issue's line, `header.X` of the header. */
+export function readValue(result, issue, key) {
+  if (key.startsWith("line.")) return result.lines[issue.line_index]?.[key.slice(5)];
+  if (key.startsWith("header.")) return result.header?.[key.slice(7)];
+  return undefined;
+}
+
+/**
+ * The buttons of an open issue: {intro, buttons: [{label, body, primary, tag}]}. Button k
+ * of an item sends `suggestion: k`. One item with one cell: "Accept 688.68" / "Keep
+ * 344.34"; one with several (a second reading): an intro naming them, then "Accept …" /
+ * "Keep as read"; several items: "Set quantity to 9" each, the one that agrees with
+ * another printed value primary and tagged, then "Keep as read"; none: "Mark as checked".
+ */
+export function choices(issue, result) {
+  const items = (issue.suggestions ?? []).map((item, k) => ({ item, k, cells: cellsOf(item) })).filter((x) => x.cells.length);
+  const keep = { action: "keep" };
+  if (!items.length) return { intro: null, buttons: [{ label: "Mark as checked", body: keep, primary: false, tag: null }] };
+  const accept = (k) => ({ action: "accept", suggestion: k });
+  if (items.length === 1) {
+    const { item, k, cells } = items[0];
+    if (cells.length === 1) {
+      const [key] = cells[0];
+      return {
+        intro: null,
+        buttons: [
+          { label: `Accept ${suggested(cells[0])}`, body: accept(k), primary: true, tag: null },
+          { label: `Keep ${value(key, readValue(result, issue, key))}`, body: keep, primary: false, tag: null },
+        ],
+      };
+    }
+    const second = item.source === "second_reading";
+    return {
+      intro: `${second ? "Second reading" : "Suggested"}: ${cells.map((c) => `${fieldName(c[0])} ${suggested(c)}`).join(" · ")}`,
+      buttons: [
+        { label: second ? "Accept the second reading" : "Accept these values", body: accept(k), primary: true, tag: null },
+        { label: "Keep as read", body: keep, primary: false, tag: null },
+      ],
+    };
+  }
+  return {
+    intro: null,
+    buttons: [
+      ...items.map(({ item, k, cells }) => ({
+        label: `Set ${cells.map((c) => `${fieldName(c[0])} to ${suggested(c)}`).join(" and ")}`,
+        body: accept(k),
+        primary: item.agrees_with != null,
+        tag: item.agrees_with != null ? `matches the ${fieldName(item.agrees_with)}` : null,
+      })),
+      { label: "Keep as read", body: keep, primary: false, tag: null },
+    ],
+  };
+}
+
+/** What a decided issue says: "Accepted amount 688.68", "Kept as read", "Marked as checked". */
+export function decidedText(issue, entry) {
+  if (entry.state === "accepted") {
+    return `Accepted ${cellsOf(entry).map((c) => `${fieldName(c[0])} ${suggested(c)}`).join(" · ")}`;
+  }
+  return issue.suggestions?.length ? "Kept as read" : "Marked as checked";
+}
+
+/** The fields the document frames for an issue: once a value is accepted, only the cells
+ * it set (the amount, not the quantity and price that were in doubt with it). */
+export function framedFields(issue, review) {
+  const entry = review?.issues?.[issue.id];
+  return entry?.state === "accepted" && cellsOf(entry).length ? cellsOf(entry).map(([key]) => key) : (issue.fields ?? []);
+}
+
+/** The values a person accepted: {lines: Map<line index, Map<key, value>>, header: Map<key, value>}. */
+export function acceptedValues(result, review) {
+  const lines = new Map();
+  const header = new Map();
+  for (const entry of review?.issues ?? []) {
+    if (entry.state !== "accepted") continue;
+    const issue = result.issues[entry.id];
+    for (const [key, v] of cellsOf(entry)) {
+      if (key.startsWith("header.")) header.set(key.slice(7), v);
+      else if (key.startsWith("line.") && issue?.line_index != null) {
+        (lines.get(issue.line_index) ?? lines.set(issue.line_index, new Map()).get(issue.line_index)).set(key.slice(5), v);
+      }
+    }
+  }
+  return { lines, header };
 }
 
 // ------------------------------------------------------------------ where things are on the page

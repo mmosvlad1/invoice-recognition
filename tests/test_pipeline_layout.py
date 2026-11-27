@@ -2,10 +2,12 @@
 page and the fallback to reading every page by the model. Fake OpenRouter, no network."""
 
 import asyncio
+import io
 import json
 
 import httpx
 import pytest
+from pypdf import PdfReader, PdfWriter
 
 from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
@@ -14,7 +16,7 @@ from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.results import PageResult, Result
 from invoice_recognition.shapes import JSONObject, Line
 
-from drawn import scan, scan_with_ocr_text
+from drawn import scan, scan_with_invisible_ocr, scan_with_ocr_text, sheet
 from fakes import Answer, Server, codes, header_for, line, run, sse
 from samples import WITH_LAYOUT, exact, saved_layout, truth_doc
 
@@ -282,3 +284,33 @@ def test_scan_with_an_ocr_text_layer_is_treated_as_a_scan() -> None:
 def test_digital_pdfs_are_not_mistaken_for_scans(name: str) -> None:
     data, *_ = truth_doc(name)
     assert lay.scanned_pages(data) == []
+
+
+def rotated(data: bytes, degrees: int) -> bytes:
+    """The PDF with /Rotate set on every page: the page is shown turned, nothing redrawn."""
+    reader, writer = PdfReader(io.BytesIO(data)), PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page.rotate(degrees))
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("degrees", [0, 90, 180, 270])
+def test_scan_shown_turned_is_still_a_scan(degrees: int) -> None:
+    # A scanner, or the person who fixed a sideways scan, sets /Rotate instead of turning
+    # the pixels; pdfium then reports the page turned, the image placed as stored.
+    data = rotated(scan_with_invisible_ocr(sheet()), degrees)
+    assert ev.has_text_layer(ev.pdf_text_layer(data))
+    assert lay.scanned_pages(data) == [1]
+    rows = [line(1), line(2)]
+    server = Server(header_for(rows), {1: [rows]})
+    res = run(data, "application/pdf", server)
+    assert server.calls["layout"] == 0 and res.evidence_source is None
+    assert "treated as a scan" in res.layout["reason"]
+    assert res.status == "ok" and res.quality["pages"][0]["verdict"] == "ok"
+
+
+def test_digital_page_shown_turned_is_not_a_scan() -> None:
+    data, *_ = truth_doc("s_classic")
+    assert lay.scanned_pages(rotated(data, 90)) == []

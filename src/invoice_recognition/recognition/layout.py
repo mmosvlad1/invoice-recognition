@@ -103,14 +103,19 @@ def text_lines(data: bytes) -> list[list[TextLine]]:
 
 
 def scanned_pages(data: bytes, min_cover: float = 0.85) -> list[int]:
-    """Pages (1-based) where one image covers nearly the whole sheet. Such a page
-    is a scan, whatever text lies over it: the text layer was put there by
-    somebody's OCR and is no better a witness than our own OCR would be."""
+    """Pages (1-based) where one image covers nearly the whole sheet, however the page
+    is turned. Such a page is a scan, whatever text lies over it: the text layer was put
+    there by somebody's OCR and is no better a witness than our own OCR would be."""
     pdf = pdfium.PdfDocument(data)
     out = []
     try:
         for pno, page in enumerate(pdf, start=1):
             w, h = page.get_size()
+            # The size is that of the page as shown; the bounds of an image are in the
+            # coordinates of the page as stored. A page shown turned by 90 or 270 degrees
+            # (/Rotate) has its width and height swapped against its images.
+            if page.get_rotation() % 180:
+                w, h = h, w
             for obj in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE]):
                 left, bottom, right, top = obj.get_bounds()
                 seen = max(0.0, min(right, w) - max(left, 0.0)) * max(

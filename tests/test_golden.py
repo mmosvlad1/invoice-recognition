@@ -7,7 +7,7 @@ research prototype, and are not regenerated from this repository. The new proces
 return the same and send the same, to the byte of every prompt and attached PDF. Each
 scenario runs twice: plain, and served - with the arguments the API passes to process()
 (the local work on a lane of its own, a limit on model requests shared with other
-documents).
+documents, an overall deadline far beyond the scenario).
 
 The texts of the photo_ and scan_ issues were reworded when the flow was ported (full
 sentences); the files carry the new wording, with the numbers the prototype produced. A
@@ -120,7 +120,8 @@ def comparable_requests(bodies: list[dict[str, Any]], exact_files: bool) -> list
 
 def run_case(case: Case, served: bool = False) -> tuple[bytes, Result, Model]:
     """process() on the scenario. served: called the way the API calls it, with the local
-    work on a lane of its own and a limit on requests shared with other documents."""
+    work on a lane of its own, a limit on requests shared with other documents and a far
+    deadline."""
     data, mime = case.data()
     model = case.model()
 
@@ -133,7 +134,8 @@ def run_case(case: Case, served: bool = False) -> tuple[bytes, Result, Model]:
                     data,
                     mime,
                     client,
-                    Config(**case.config),
+                    # Not in case.config: the golden file pins that config.
+                    Config(**case.config, deadline_s=240.0),
                     lane=lane,
                     request_slots=asyncio.Semaphore(24),
                 )

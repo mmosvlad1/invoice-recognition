@@ -13,6 +13,10 @@ class Config:
     page_models: tuple[str, ...] = (FAST, FAST)
     header_model: str = FAST
     concurrency: int = 12  # requests in flight at once
+    # Seconds from the start of process() after which no request is started and a request
+    # in flight is cut short; what was read by then is returned (Result.issues
+    # "deadline_exceeded"). Local work already running is not interrupted. None: no deadline.
+    deadline_s: float | None = None
     page_timeout_s: float = 120.0
     page_max_tokens: int = 16_000
     # A PDF with a text layer: the model describes the layout of the line-item table once and

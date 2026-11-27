@@ -16,6 +16,10 @@ from invoice_recognition.recognition.pipeline import page_ranges
 BAD_REQUEST = "The request could not be read."
 UNAUTHORIZED = "The access code is missing or wrong."
 NOT_FOUND = "There is nothing at this address."
+JOB_NOT_FOUND = (
+    "There is no document with this id. The server keeps only the most recent documents, "
+    "and none from before it was restarted."
+)
 METHOD_NOT_ALLOWED = "This address does not accept {method} requests."
 # Also the upload's own check (uploads.py).
 FILE_TOO_LARGE = "The file is larger than the limit of {limit}."

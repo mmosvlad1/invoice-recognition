@@ -12,11 +12,14 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
 
+import anyio
 import httpx
 from fastapi import FastAPI
 from pydantic import SecretStr
 from reportlab.pdfgen import canvas
 
+from invoice_recognition.api.app import create_app
+from invoice_recognition.api.jobs import FINAL
 from invoice_recognition.api.settings import Settings
 from invoice_recognition.recognition import pipeline
 from invoice_recognition.recognition.checks import Issue
@@ -272,3 +275,27 @@ async def api_client(
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+@asynccontextmanager
+async def serve(
+    server: Handler | SlowServer, settings: Settings | None = None
+) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
+    """The app started as a server starts it (its lifespan: the reading service runs),
+    with every model request answered by `server`, and a client for it. The app stops on
+    the way out."""
+    app = create_app(settings or api_settings(), transport=httpx.MockTransport(server))
+    async with app.router.lifespan_context(app), api_client(app) as client:
+        yield client, app
+
+
+async def wait_final(client: httpx.AsyncClient, job_id: str) -> JSONObject:
+    """Poll the job until its status is final; its last answer."""
+    with anyio.fail_after(5):
+        while True:
+            answer = await client.get(f"/invoices/{job_id}")
+            assert answer.status_code == 200, answer.text
+            body: JSONObject = answer.json()
+            if body["status"] in FINAL:
+                return body
+            await anyio.sleep(0.01)

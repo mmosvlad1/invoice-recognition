@@ -148,25 +148,63 @@ def check_page(
     return issues
 
 
+class DeadlinePassed(Exception):
+    """The overall deadline of the document passed before a request could be sent."""
+
+
 @dataclass
 class Gate:
     """What every model request of one process() call passes before it is sent.
 
     slots: the limit on requests in flight shared by every document being read (None:
     no shared limit). Each document also has its own limit (Config.concurrency) on its
-    page requests; that one is passed to enter() and leave() as `own`."""
+    page requests; that one is passed to enter() and leave() as `own`.
+
+    deadline: the overall deadline of the document on the time.monotonic() clock (None:
+    none). hit: a request was not sent, or was cut short, because it passed."""
 
     slots: asyncio.Semaphore | None = None
+    deadline: float | None = None
+    hit: bool = False
+
+    def remaining(self) -> float | None:
+        return None if self.deadline is None else self.deadline - time.monotonic()
+
+    def passed(self) -> bool:
+        return self.deadline is not None and time.monotonic() >= self.deadline
+
+    def cut(self, res: LLMResult) -> bool:
+        """The request ended in an error when the deadline had passed: it was cut short by
+        it. Told by the clock, right after the request returns, never by the error text."""
+        if res.error is not None and self.passed():
+            self.hit = True
+            return True
+        return False
 
     async def enter(self, own: asyncio.Semaphore | None) -> None:
         """Wait for the document's own limit, then for a shared slot: always in this
-        order, so that no two requests hold one each and wait for the other."""
+        order, so that no two requests hold one each and wait for the other.
+
+        Only these waits are bounded by the deadline, never the request itself: a request
+        that is sent runs to its own timeout (which _call shortens to the deadline), so its
+        attempt, tokens and cost are kept. Raises DeadlinePassed, holding nothing, when the
+        deadline has passed or passes while waiting."""
         held: list[asyncio.Semaphore] = []
         try:
-            for sem in (own, self.slots):
-                if sem is not None:
-                    await sem.acquire()
-                    held.append(sem)
+            if self.passed():
+                raise DeadlinePassed
+            async with asyncio.timeout(self.remaining()):
+                for sem in (own, self.slots):
+                    if sem is not None:
+                        await sem.acquire()
+                        held.append(sem)
+            if self.passed():
+                raise DeadlinePassed
+        except TimeoutError, DeadlinePassed:
+            for sem in held:
+                sem.release()
+            self.hit = True
+            raise DeadlinePassed from None
         except BaseException:  # cancelled while waiting: give back what was taken
             for sem in held:
                 sem.release()
@@ -194,18 +232,20 @@ async def _call(
 
     Every wait before a request happens here: for `own`, the limit of the document on its
     page requests (None for the header and the layout), and for a shared slot of the
-    gate."""
+    gate. Raises DeadlinePassed when the request cannot be sent before the deadline; a
+    request that is sent ends at the deadline at the latest."""
     if gate is None:
         gate = Gate()
     await gate.enter(own)
     try:
+        left = gate.remaining()
         return await complete(
             client,
             model,
             prompt,
             [part] if part else [],
             max_tokens=max_tokens,
-            timeout_s=timeout_s,
+            timeout_s=timeout_s if left is None else min(timeout_s, left),
         )
     except Exception as e:  # fault boundary: one request
         logger.warning("request to %s failed", model, exc_info=True)
@@ -242,7 +282,11 @@ async def read_page(
 ) -> PageResult:
     """Read one page, once per entry of cfg.page_models until an attempt passes its
     checks, and keep the best attempt. sem: the document's limit on page requests in
-    flight; gate: the shared one (None: none).
+    flight; gate: the shared one and the deadline (None: neither).
+
+    At the deadline the attempts stop. A page with no attempt that ran to its end (none
+    was sent, or every one was cut short) gets a "page_read" issue that says so and
+    PageResult.deadline_unread.
 
     Issues of the returned page index its own lines (0-based within the page);
     process() shifts them to document positions.
@@ -255,17 +299,26 @@ async def read_page(
     attempts: list[Attempt] = []
     counts: list[int] = []  # lines per attempt, for the attempts that were read cleanly
     prompt = co.carry_prompt(page, total) if carry else EXTRACT_PAGE.format(page=page, total=total)
+    if gate is None:
+        gate = Gate()
+    stopped = completed = False
     for model in cfg.page_models:
-        res = await _call(
-            client,
-            model,
-            prompt,
-            part,
-            cfg.page_max_tokens,
-            cfg.page_timeout_s,
-            gate=gate,
-            own=sem,
-        )
+        try:
+            res = await _call(
+                client,
+                model,
+                prompt,
+                part,
+                cfg.page_max_tokens,
+                cfg.page_timeout_s,
+                gate=gate,
+                own=sem,
+            )
+        except DeadlinePassed:
+            stopped = True
+            break  # no stronger-model note: the page was stopped by the deadline
+        cut = gate.cut(res)
+        completed = completed or not cut
         parsed = parse_json(res.text)
         rows = (parsed or {}).get("rows")
         tail = ""
@@ -310,7 +363,7 @@ async def read_page(
         key = (failed, len(issues), -len(lines))
         if best is None or key < best_key:
             best, best_key = cand, key
-        if not best.issues:
+        if not best.issues or cut:  # cut: the deadline passed, no attempt can follow
             break
     else:
         # Every attempt was made and the best one still fails its checks: this is where a
@@ -322,7 +375,17 @@ async def read_page(
             answered = any(a.error is None for a in attempts)
             best.stronger_model = answered and len(set(cfg.page_models)) == 1
     if best is None:
-        raise ValueError("no attempt was made: Config.page_models is empty")
+        if not stopped:
+            raise ValueError("no attempt was made: Config.page_models is empty")
+        best = PageResult(page)  # the deadline passed before the first attempt
+    if not completed:
+        # One page_read issue for the page, this one: the error of each cut attempt (its
+        # timeout, shortened to the deadline) stays in its Attempt.
+        best.issues = [i for i in best.issues if i.check != "page_read"]
+        best.issues.append(
+            Issue("page_read", deadline_unread_text(page, len(best.lines)), page=page)
+        )
+        best.deadline_unread = True
     best.attempts = attempts
     if evidence is None and len(set(counts)) > 1:
         # No text layer to say which attempt is complete: keep the page flagged.
@@ -334,6 +397,18 @@ async def read_page(
             )
         )
     return best
+
+
+def deadline_unread_text(page: int, lines: int) -> str:
+    """The message of the page_read issue of a page no attempt at which ran to its end;
+    lines: the line items kept from a cut attempt."""
+    if not lines:
+        return f"Page {page} was not read: the time limit for the document passed."
+    items = "line item" if lines == 1 else "line items"
+    return (
+        f"Page {page} was not read to the end: the time limit for the document passed. "
+        f"The {lines} {items} read before that may be incomplete."
+    )
 
 
 def stronger_model_note(pr: PageResult) -> JSONObject:
@@ -363,7 +438,15 @@ async def ask_layout(
     client: httpx.AsyncClient, prompt: str, cfg: Config, *, gate: Gate | None = None
 ) -> tuple[JSONObject | None, list[Attempt], str | None]:
     """One text-only request. Returns (answer, attempts, why it cannot be used)."""
-    res = await _call(client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90, gate=gate)
+    if gate is None:
+        gate = Gate()
+    try:
+        res = await _call(
+            client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90, gate=gate
+        )
+    except DeadlinePassed:
+        return None, [], "the overall deadline passed"
+    gate.cut(res)
     raw = None if res.error else parse_json(res.text)
     error = res.error or (
         None if raw is not None else f"answer is not valid JSON (finish={res.finish_reason})"
@@ -688,16 +771,58 @@ def _scan_quality(
 
 async def read_header(
     client: httpx.AsyncClient, part: ContentPart, cfg: Config, *, gate: Gate | None = None
-) -> tuple[Header, list[Attempt]]:
+) -> tuple[Header, list[Attempt], bool]:
+    """Read the header, a second time when the first answer lacks the total or the
+    supplier. Returns (header, attempts, whether an attempt ran to its end).
+
+    At the deadline the attempts stop and the header of the last attempt that ran to its
+    end is kept ({} when there is none). A cut attempt's answer is never used: a header
+    cannot be salvaged from a part of it, as page rows can."""
+    if gate is None:
+        gate = Gate()
     attempts: list[Attempt] = []
     header: Header = {}
+    answered = False
     for _ in range(2):
-        res = await _call(client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate)
-        header = parse_json(res.text) or {}
-        attempts.append(_attempt(res, 0, 0 if header else 1))
+        try:
+            res = await _call(client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate)
+        except DeadlinePassed:
+            break
+        cut = gate.cut(res)
+        answer = parse_json(res.text) or {}
+        attempts.append(_attempt(res, 0, 0 if answer else 1))
+        if cut:
+            break
+        header, answered = answer, True
         if header.get("total") is not None and header.get("supplier_name"):
             break
-    return header, attempts
+    return header, attempts, answered
+
+
+def page_ranges(pages: list[int]) -> str:
+    """[2, 5, 6, 7, 12] -> "2, 5–7 and 12"."""
+    runs: list[list[int]] = []
+    for p in sorted(pages):
+        if runs and p == runs[-1][-1] + 1:
+            runs[-1].append(p)
+        else:
+            runs.append([p])
+    parts = [f"{r[0]}–{r[-1]}" if len(r) > 1 else str(r[0]) for r in runs]
+    return parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
+def deadline_text(deadline_s: float | None, unread: list[int], header_read: bool) -> str:
+    """The message of the issue "deadline_exceeded": the pages and the header not read."""
+    text = [f"Reading stopped at the time limit of {deadline_s:g} s for one document."]
+    if len(unread) == 1:
+        text.append(f"Page {unread[0]} was not read.")
+    elif unread:
+        text.append(f"Pages {page_ranges(unread)} were not read.")
+    if not header_read:
+        text.append("The header (supplier, invoice number, totals) was not read.")
+    if not unread and header_read:
+        text.append("Every page was read; a repeated read of a page or of the header was stopped.")
+    return " ".join(text)
 
 
 @dataclass
@@ -856,10 +981,18 @@ async def process(
 
     request_slots limits the model requests in flight of every document that is given the
     same semaphore; each document also keeps its own limit on page requests
-    (Config.concurrency). None: only that one."""
+    (Config.concurrency). None: only that one.
+
+    Config.deadline_s bounds the whole call, counted from its start: the wait for the lane
+    and the local work count. When it passes, no request is started, a request in flight
+    ends as a failed attempt (its cost is then unknown) and what was read is returned with
+    the issue "deadline_exceeded". The status is "failed" when a page has no attempt that
+    ran to its end (that page has a "page_read" issue saying so); otherwise it follows the
+    usual rule, so a document whose every page was read is at worst "needs_review"."""
     cfg = cfg or Config()
     started = time.monotonic()
-    gate = Gate(request_slots)
+    deadline = None if cfg.deadline_s is None else started + cfg.deadline_s
+    gate = Gate(request_slots, deadline)
     if lane is None:
         prep = prepare(data, mime, cfg)
     else:
@@ -932,7 +1065,7 @@ async def _read(
         first, *rest = await asyncio.gather(
             read_header(client, header_part, cfg, gate=gate), *(one(p) for p in range(1, n + 1))
         )
-        header, header_attempts = cast(tuple[Header, list[Attempt]], first)
+        header, header_attempts, header_read = cast(tuple[Header, list[Attempt], bool], first)
         pages = cast(list[PageResult], rest)
     else:
         # The page shown to the layout model and read by the witness: the first one with
@@ -944,7 +1077,11 @@ async def _read(
             # found by code, nothing more.
             return await one(wp, announce=False, with_carry=False) if cfg.layout_witness else None
 
-        (header, header_attempts), (raw, layout_attempts, error), seen = await asyncio.gather(
+        (
+            (header, header_attempts, header_read),
+            (raw, layout_attempts, error),
+            seen,
+        ) = await asyncio.gather(
             read_header(client, header_part, cfg, gate=gate),
             ask_layout(client, lay.layout_request(text_pages, wp), cfg, gate=gate),
             witness(),
@@ -997,16 +1134,14 @@ async def _read(
                 )
         else:
             if layout_info["status"] == "unverified":
-                layout_issues.append(
-                    Issue(
-                        "layout_unverified",
-                        page=wp,
-                        message=(
-                            f"the model returned no rows for page {wp}, so nothing confirms "
-                            "which column is quantity and which is unit price"
-                        ),
-                    )
+                why = (
+                    f"the check read of page {wp} was stopped by the time limit for the "
+                    "document, so the rows found by code were not confirmed"
+                    if seen is not None and seen.deadline_unread
+                    else f"the model returned no rows for page {wp}, so nothing confirms "
+                    "which column is quantity and which is unit price"
                 )
+                layout_issues.append(Issue("layout_unverified", page=wp, message=why))
             found = by_code
 
             async def settle(p: int) -> PageResult:
@@ -1073,9 +1208,16 @@ async def _read(
         issues += checks.check_header_grounding(doc, evidence)
 
     issues += layout_issues + photo_issues
+    unread = [p.page for p in pages if p.deadline_unread]
+    if gate.hit:
+        text = deadline_text(cfg.deadline_s, unread, header_read)
+        issues.append(Issue("deadline_exceeded", text))
 
     all_attempts = header_attempts + layout_attempts + [a for p in pages for a in p.attempts]
-    status = "failed" if not lines or not header else ("needs_review" if issues else "ok")
+    if unread or not lines or not header:
+        status = "failed"
+    else:
+        status = "needs_review" if issues else "ok"
     return Result(
         status=status,
         header=header,

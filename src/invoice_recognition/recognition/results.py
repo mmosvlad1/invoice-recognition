@@ -41,10 +41,19 @@ class PageResult:
     # request got an answer, and only one model is configured: a stronger model would read
     # it again here (not called; Result.notes says so).
     stronger_model: bool = False
+    # The overall deadline passed before any attempt at this page ran to its end: none was
+    # sent, or every one was cut short. The page has a "page_read" issue saying so and the
+    # document is "failed". Not in Result.to_json().
+    deadline_unread: bool = False
 
 
 @dataclass
 class Result:
+    """One document as read. status: "ok" - no issue; "needs_review" - read, with issues;
+    "failed" - no line items, no header, nothing sent, or a page left unread at the
+    overall deadline (Config.deadline_s). When that deadline cut the reading short, one
+    issue "deadline_exceeded" says so and names the pages not read."""
+
     status: str  # ok | needs_review | failed
     header: Header
     lines: list[Line]

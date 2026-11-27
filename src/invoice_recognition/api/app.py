@@ -2,6 +2,7 @@
 the app does."""
 
 import asyncio
+import logging
 import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,14 +12,25 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, File, Request, Response, UploadFile
+from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 
 from invoice_recognition.api import messages, problems, uploads, views
+from invoice_recognition.api.access import AccessMiddleware
 from invoice_recognition.api.jobs import Job, StoreFull
 from invoice_recognition.api.problems import ApiError, Problem
 from invoice_recognition.api.service import Service
 from invoice_recognition.api.settings import Settings
 from invoice_recognition.llm import openrouter_client
+
+logger = logging.getLogger(__name__)
+
+# Declares the access code in the documentation, so that /docs has an "Authorize" button.
+# Its value is not used: the code is checked by AccessMiddleware before the body is read.
+BEARER = HTTPBearer(
+    auto_error=False,
+    description="The access code (ACCESS_CODE), sent as Authorization: Bearer <code>.",
+)
 
 # Room in an upload's body for the multipart envelope around the file (boundaries, the
 # part's headers with the file name): the size limit is on the file, MAX_FILE_BYTES.
@@ -76,7 +88,12 @@ def content_disposition(filename: str) -> str:
 
 
 def _invoices(settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/invoices", tags=["invoices"])
+    router = APIRouter(
+        prefix="/invoices",
+        tags=["invoices"],
+        dependencies=[Depends(BEARER)],
+        responses={401: _problem("The access code is missing or wrong (unauthorized).")},
+    )
     limits = uploads.UploadLimits(
         max_file_bytes=settings.max_file_bytes,
         max_pages=settings.max_pages,
@@ -218,11 +235,18 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     transport replaces the network for the requests to the model provider (tests pass an
     `httpx.MockTransport`); None in production."""
 
+    code = settings.access_code.get_secret_value()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # One client for every model request of the process, and the workers that send
         # them; both end with the app. Cancelled workers are awaited before the client is
         # closed, so no request is left using it.
+        if not code:
+            logger.warning(
+                "ACCESS_CODE is not set: the /invoices routes are open to anyone who can "
+                "reach this server. Set it for anything reachable from outside."
+            )
         client = openrouter_client(
             settings.openrouter_api_key.get_secret_value(), transport=transport
         )
@@ -240,6 +264,8 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         summary="Reads invoices (PDF, scan or photo) and checks what was read.",
         version=version("invoice-recognition"),
         lifespan=lifespan,
+        # One documentation page (/docs, Swagger UI) is enough.
+        redoc_url=None,
         # "/health/" is not "/health": the automatic redirect would name an http:// address,
         # wrong behind an HTTPS tunnel.
         redirect_slashes=False,
@@ -256,4 +282,8 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     app.head("/health", include_in_schema=False)(health)
 
     app.include_router(_invoices(settings))
+    if code:
+        # Outside the router, where the body limit and the form parsing are: it answers
+        # before anything reads the body.
+        app.add_middleware(AccessMiddleware, code=code)
     return app

@@ -13,15 +13,26 @@ page_frames, which opens the PDF.
 
 import logging
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import pypdfium2 as pdfium
+
+from invoice_recognition.recognition import layout as lay
+from invoice_recognition.recognition.layout import Word
 
 logger = logging.getLogger(__name__)
 
 type Rect = tuple[float, float, float, float]
 """[x0, y0, x1, y1]: left, top, right, bottom on the displayed page, rounded outwards
 to 0.1 point and held to the page: 0 <= x0 < x1 <= width, 0 <= y0 < y1 <= height."""
+
+type LineBoxes = dict[str, Rect | None]
+"""Where one line item is printed on its own page: always the keys of BOX_KEYS. "row" is
+the whole printed item (its row and its wrapped description), never None; every other
+key is the line's own key, None when that value is not framed."""
+
+BOX_KEYS = ("row", *lay.FIELDS)
 
 EDGE_TOL = 0.5  # points: how far a value may stick out of the page and still be framed
 
@@ -124,3 +135,71 @@ def page_frames(data: bytes) -> list[PageFrame | None]:
     if missing:
         logger.warning("pages without a usable page box, nothing is framed on them: %s", missing)
     return frames
+
+
+def _union(words: Iterable[Word]) -> tuple[float, float, float, float] | None:
+    """The box around the words, in user space; None for no words."""
+    ws = list(words)
+    if not ws:
+        return None
+    return (
+        min(w.x0 for w in ws),
+        min(w.bottom for w in ws),
+        max(w.x1 for w in ws),
+        max(w.top for w in ws),
+    )
+
+
+def _place(frame: PageFrame, words: Iterable[Word], *, cell: bool) -> Rect | None:
+    box = _union(words)
+    return None if box is None else frame.place(*box, cell=cell)
+
+
+def _frame_of(page: object, frames: list[PageFrame | None]) -> PageFrame | None:
+    if not isinstance(page, int) or isinstance(page, bool) or not 1 <= page <= len(frames):
+        return None
+    return frames[page - 1]
+
+
+# --------------------------------------------------------------------------- #
+# Line items found by code
+# --------------------------------------------------------------------------- #
+
+
+def from_layout(
+    parsed: lay.Parsed,
+    layout: lay.Layout,
+    frames: list[PageFrame | None],
+    tol: float = lay.X_TOL,
+) -> list[LineBoxes | None]:
+    """Where each line item of the layout road is printed, parallel to parsed.lines.
+
+    Exact: each item row is cut into cells again, by the same columns and tolerance the
+    parser used, so a value's rectangle holds the very words its value was read from. A
+    value that is None or empty, or a tax rate the layout does not print in the row, is
+    not framed. The description is its cell plus every wrapped row on the item's page.
+    A line on a page without a frame, or whose rows are all off the displayed page,
+    gets None."""
+    ix = {f: layout.index(f) for f in lay.FIELDS}
+    out: list[LineBoxes | None] = []
+    for item, rows in zip(parsed.lines, parsed.rows, strict=True):
+        frame = _frame_of(item.get("page"), frames)
+        row = (
+            None if frame is None else _place(frame, (w for r in rows for w in r.words), cell=False)
+        )
+        if frame is None or row is None:
+            out.append(None)
+            continue
+        cells, _ = lay.assign(rows[0].words, layout.columns, tol)
+        found: LineBoxes = {"row": row}
+        for key in lay.FIELDS:
+            i = ix[key]
+            words = list(cells.get(i, [])) if i is not None else []
+            if key == "description":
+                words += [w for r in rows[1:] for w in r.words]
+            value = item.get(key)
+            if value is None or value == "" or (key == "tax_rate" and not layout.tax_in_row):
+                words = []
+            found[key] = _place(frame, words, cell=True)
+        out.append(found)
+    return out

@@ -2,12 +2,17 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # The vendored PDF.js stays byte for byte as published (tests/test_web_vendor.py
+      # checks its sums): these hooks would rewrite it, or refuse its 1.4 MB worker.
       - id: trailing-whitespace
+        exclude: ^src/invoice_recognition/web/static/vendor/
       - id: end-of-file-fixer
+        exclude: ^src/invoice_recognition/web/static/vendor/
       - id: check-toml
       - id: check-yaml
       - id: check-merge-conflict
       - id: check-added-large-files
+        exclude: ^src/invoice_recognition/web/static/vendor/
 
   # Keep rev equal to the ruff version pinned in uv.lock, so the hook and
   # `uv run ruff` in CI apply the same rules and formatting.

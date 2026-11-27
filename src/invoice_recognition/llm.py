@@ -28,6 +28,10 @@ REQUEST_TIMEOUT_S = 120.0
 type ContentPart = dict[str, Any]
 """One element of a chat message's content list (a file or an image)."""
 
+PDF_NATIVE: list[JSONObject] = [{"id": "file-parser", "pdf": {"engine": "native"}}]
+"""OpenRouter's plugins for a request whose PDF must reach the model as the file itself:
+without them OpenRouter may hand the model the text of its own OCR of the file instead."""
+
 
 @dataclass
 class LLMResult:
@@ -83,8 +87,12 @@ async def complete(
     max_tokens: int,
     timeout_s: float = 300.0,  # total deadline for the call, not per chunk
     json_mode: bool = True,
+    plugins: list[JSONObject] | None = None,
 ) -> LLMResult:
     """One streamed chat completion: the prompt as text, then `parts`.
+
+    plugins: OpenRouter plugins for this request (PDF_NATIVE); None sends no "plugins"
+    key, so the body is the one sent before the parameter existed.
 
     HTTP errors, an error event in the stream, a stream with nothing readable
     and timeouts do not raise: they end up in `LLMResult.error`, next to
@@ -103,6 +111,8 @@ async def complete(
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
+    if plugins is not None:
+        body["plugins"] = plugins
 
     res = LLMResult(model=model)
     chunks: list[str] = []

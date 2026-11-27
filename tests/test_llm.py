@@ -10,6 +10,7 @@ import pytest
 
 from invoice_recognition.llm import (
     OPENROUTER_URL,
+    PDF_NATIVE,
     ContentPart,
     LLMResult,
     complete,
@@ -18,6 +19,7 @@ from invoice_recognition.llm import (
     parse_json,
     salvage_lines,
 )
+from invoice_recognition.shapes import JSONObject
 
 from fakes import sse
 
@@ -30,6 +32,7 @@ def call(
     *,
     timeout_s: float = 300.0,
     json_mode: bool = True,
+    plugins: list[JSONObject] | None = None,
 ) -> LLMResult:
     async def go() -> LLMResult:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -41,6 +44,7 @@ def call(
                 max_tokens=100,
                 timeout_s=timeout_s,
                 json_mode=json_mode,
+                plugins=plugins,
             )
 
     return asyncio.run(go())
@@ -72,6 +76,22 @@ def test_request_body_is_pinned_to_the_byte() -> None:
         b'"file_data":"data:application/pdf;base64,JVBERg=="}}]}],'
         b'"response_format":{"type":"json_object"}}'
     )
+
+
+def test_plugins_are_one_more_key_and_change_nothing_else() -> None:
+    bodies: list[JSONObject] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, text=sse("{}"))
+
+    pdf = [file_part(b"%PDF", "application/pdf", "page1.pdf")]
+    call(handler, pdf)
+    call(handler, pdf, plugins=PDF_NATIVE)
+    plain, with_plugins = bodies
+    assert "plugins" not in plain
+    assert with_plugins.pop("plugins") == [{"id": "file-parser", "pdf": {"engine": "native"}}]
+    assert with_plugins == plain
 
 
 def test_text_only_request_without_json_mode() -> None:

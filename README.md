@@ -143,6 +143,40 @@ curl -H "$AUTH" -o invoice.pdf $API/invoices/5f0c2a9e4b7d4c1e9a3f6b8d2e1c7a90/fi
 The original bytes, with the type decided at upload and the file name in
 `Content-Disposition: inline`. The whole file, no range requests.
 
+### `PUT /invoices/{id}/issues/{issue_id}/resolution`: decide on an issue
+
+```bash
+curl -X PUT -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"action": "accept", "suggestion": 2}' \
+  $API/invoices/5f0c2a9e4b7d4c1e9a3f6b8d2e1c7a90/issues/0/resolution
+```
+
+A person reviewing a read document takes item `k` of an issue's
+`suggestions` (`{"action": "accept", "suggestion": k}`, every cell of its
+`set`) or keeps the values as read (`{"action": "keep"}`; for an issue
+without suggestions it means "checked"). The same request again changes
+nothing; a different one replaces the decision. `DELETE` on the same path takes
+it back. Both answer the document's `review`, which `GET /invoices/{id}` also
+returns: each issue's `state` (`open`, `accepted`, `kept`, or `settled` when
+every issue it `follows_from` is accepted with the arithmetic amount of its
+line) and `open_count`; list items carry `open_issue_count`.
+
+Decisions are kept in memory with the job and lost with it. They never change
+the result: values stay as read, and `status` and `issue_count` describe the
+reading. A cell's final value is the `set` of its accepted decision, else as
+read; cells never collide (409).
+
+| Status | `code` | When |
+|---|---|---|
+| 404 | `not_found` / `issue_not_found` | no such document / no such issue |
+| 409 | `not_reviewable` | the document is not finished, or failed |
+| 409 | `resolution_conflict` | the item would set a cell that another accepted decision set to a different value (quantity, unit price, tax rate, amount, subtotal, tax and total compared as numbers, every other cell exactly) |
+| 422 | `invalid_request` | the body is not one of the two shapes above, or `issue_id` is not an integer |
+| 422 | `invalid_resolution` | `accept` on an issue without suggestions, or no item `k` |
+| 413 | `body_too_large` | a body over 1 KiB (plain text when its length is declared) |
+
+A malformed body is refused (422) before the document is looked up.
+
 ### `GET /health`
 
 ```bash
@@ -204,8 +238,7 @@ The code keeps strangers out; it does not tell users apart.
 - a container image and the deployment;
 - a second reading of scans by another model, and a fallback model when a
   request fails;
-- where each value is printed on the page (`lines[].boxes`);
-- storing a reviewer's decision on an issue.
+- where each value is printed on the page (`lines[].boxes`).
 
 ## Development
 

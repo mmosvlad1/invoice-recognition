@@ -15,9 +15,9 @@ from fastapi import APIRouter, Depends, FastAPI, File, Request, Response, Upload
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 
-from invoice_recognition.api import messages, problems, uploads, views
+from invoice_recognition.api import messages, problems, review, uploads, views
 from invoice_recognition.api.access import AccessMiddleware
-from invoice_recognition.api.jobs import Job, StoreFull
+from invoice_recognition.api.jobs import Job, StoreFull, now
 from invoice_recognition.api.problems import ApiError, Problem
 from invoice_recognition.api.service import Service
 from invoice_recognition.api.settings import Settings
@@ -44,6 +44,12 @@ IMMUTABLE = "private, max-age=31536000, immutable"
 
 # What the status of a job is now must never be answered from a cache.
 NO_STORE = "no-store"
+
+# Where documents are uploaded (POST): the one route whose body is a file.
+UPLOAD_PATH = "/invoices"
+
+# The body of a decision is a few dozen bytes; anything near this is not one.
+MAX_DECISION_BYTES = 1024
 
 
 class _App(FastAPI):
@@ -85,6 +91,30 @@ def content_disposition(filename: str) -> str:
     if encoded == name:
         return f'inline; filename="{name}"'
     return f"inline; filename*=utf-8''{encoded}"
+
+
+def _job(service: Service, job_id: str) -> Job:
+    """The job with this id; 404 not_found when none is kept (never kept, or dropped by
+    retention)."""
+    job = service.store.get(job_id)
+    if job is None:
+        raise ApiError(404, "not_found", messages.JOB_NOT_FOUND)
+    return job
+
+
+def _review(job: Job) -> views.ReviewView:
+    """The review of a job a decision was just taken on (so it can be reviewed)."""
+    reviewed = views.review_view(job)
+    if reviewed is None:  # review.decide and review.undo refuse such a job first
+        raise RuntimeError(f"job {job.id} has no review after a decision")
+    return reviewed
+
+
+_NOT_FOUND = _problem(
+    "No document with this id is kept (not_found), or it has no issue with this id "
+    "(issue_not_found)."
+)
+_NOT_REVIEWABLE = "The document is not finished, or it failed (not_reviewable)."
 
 
 def _invoices(settings: Settings) -> APIRouter:
@@ -190,9 +220,7 @@ def _invoices(settings: Settings) -> APIRouter:
         """The status of a document, its progress and, once it is finished, the result.
 
         Final statuses: ok, needs_review, failed. Poll until one of them comes back."""
-        job = service.store.get(job_id)
-        if job is None:
-            raise ApiError(404, "not_found", messages.JOB_NOT_FOUND)
+        job = _job(service, job_id)
         response.headers["Cache-Control"] = NO_STORE
         return views.job_view(job)
 
@@ -211,9 +239,7 @@ def _invoices(settings: Settings) -> APIRouter:
     async def get_file(job_id: str, service: ServiceDep) -> Response:
         """The original bytes, with the type decided at upload, to show in the browser. No
         range requests: the file is sent whole."""
-        job = service.store.get(job_id)
-        if job is None:
-            raise ApiError(404, "not_found", messages.JOB_NOT_FOUND)
+        job = _job(service, job_id)
         # Starlette's Response sets Content-Length; no compression middleware is added.
         return Response(
             job.data,
@@ -225,6 +251,71 @@ def _invoices(settings: Settings) -> APIRouter:
                 "Cache-Control": IMMUTABLE,
             },
         )
+
+    @router.put(
+        "/{job_id}/issues/{issue_id}/resolution",
+        summary="Decide on an issue",
+        max_body_size=MAX_DECISION_BYTES,
+        responses={
+            404: _NOT_FOUND,
+            409: _problem(
+                f"{_NOT_REVIEWABLE} Or the item would set a cell that another accepted "
+                "decision set to a different value (resolution_conflict); a numeric cell "
+                "(quantity, unit price, tax rate, amount, subtotal, tax, total) compares "
+                "values as numbers, every other cell exactly."
+            ),
+            413: _problem(
+                "The body is larger than 1 KiB (body_too_large). When the request declares "
+                "its length, the refusal comes before the body is read, as plain text."
+            ),
+            422: _problem(
+                "The body is not one of the two shapes, or issue_id is not an integer "
+                "(invalid_request; checked before the document is looked up); accept on "
+                "an issue without suggestions, or with no item of that number "
+                "(invalid_resolution)."
+            ),
+        },
+    )
+    async def decide(
+        job_id: str,
+        issue_id: int,
+        decision: views.ResolutionRequest,
+        service: ServiceDep,
+        response: Response,
+    ) -> views.ReviewView:
+        """Accept one of the issue's suggested values (`{"action": "accept", "suggestion": k}`:
+        every cell of item k's `set`) or keep the values as read (`{"action": "keep"}`, also
+        "mark as checked"). The same request again changes nothing; a different one replaces
+        the decision. The answer is the document's review.
+
+        Decisions never change the result: values stay as read, issues and status as found,
+        and no check is run again. A cell's final value is the `set` of its accepted
+        decision, else as read; cells never collide (409)."""
+        job = _job(service, job_id)
+        # No await from here on: the decision is checked and stored in one step.
+        review.decide(job, issue_id, decision, now())
+        response.headers["Cache-Control"] = NO_STORE
+        return _review(job)
+
+    @router.delete(
+        "/{job_id}/issues/{issue_id}/resolution",
+        summary="Take a decision back",
+        responses={
+            404: _NOT_FOUND,
+            409: _problem(_NOT_REVIEWABLE),
+            422: _problem("issue_id is not an integer (invalid_request)."),
+        },
+    )
+    async def undo(
+        job_id: str, issue_id: int, service: ServiceDep, response: Response
+    ) -> views.ReviewView:
+        """Take back the decision on an issue (undo); the issue is open again, and so is
+        any issue it settled. With no decision taken, nothing changes. The answer is the
+        document's review."""
+        job = _job(service, job_id)
+        review.undo(job, issue_id)
+        response.headers["Cache-Control"] = NO_STORE
+        return _review(job)
 
     return router
 
@@ -269,7 +360,9 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         # "/health/" is not "/health": the automatic redirect would name an http:// address,
         # wrong behind an HTTPS tunnel.
         redirect_slashes=False,
-        exception_handlers=problems.handlers(max_file_bytes=settings.max_file_bytes),
+        exception_handlers=problems.handlers(
+            max_file_bytes=settings.max_file_bytes, upload_path=UPLOAD_PATH
+        ),
         responses=problems.RESPONSES,
     )
 

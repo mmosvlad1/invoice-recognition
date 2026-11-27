@@ -289,11 +289,14 @@ async def serve(
         yield client, app
 
 
-async def wait_final(client: httpx.AsyncClient, job_id: str) -> JSONObject:
-    """Poll the job until its status is final; its last answer."""
+async def wait_final(
+    client: httpx.AsyncClient, job_id: str, headers: dict[str, str] | None = None
+) -> JSONObject:
+    """Poll the job until its status is final (sending `headers`, such as the access
+    code); its last answer."""
     with anyio.fail_after(5):
         while True:
-            answer = await client.get(f"/invoices/{job_id}")
+            answer = await client.get(f"/invoices/{job_id}", headers=headers)
             assert answer.status_code == 200, answer.text
             body: JSONObject = answer.json()
             if body["status"] in FINAL:

@@ -37,6 +37,10 @@ class PageResult:
     # Text at the top of the page that belongs to the last line item of the previous page;
     # "" when not asked for.
     carry_in: str = ""
+    # The page still failed its checks after every attempt by the model, at least one
+    # request got an answer, and only one model is configured: a stronger model would read
+    # it again here (not called; Result.notes says so).
+    stronger_model: bool = False
 
 
 @dataclass
@@ -69,6 +73,9 @@ class Result:
     #                            nothing was appended: the same keys
     #     carry_without_owner  - no row to append it to; nothing was changed: + "reason"
     #     carry_join_failed    - the join broke ("page" is None); nothing was changed
+    #   a page that still fails its checks after every attempt by the model (source:
+    #   "retry"): stronger_model_not_called - a stronger model would read it again here;
+    #   none is called, to save cost
     #   a page of a scan that has no text and was not sent to the model
     #   (source: "scan_quality"): page_without_text
     notes: list[JSONObject] = field(default_factory=list)

@@ -314,3 +314,27 @@ def test_scan_shown_turned_is_still_a_scan(degrees: int) -> None:
 def test_digital_page_shown_turned_is_not_a_scan() -> None:
     data, *_ = truth_doc("s_classic")
     assert lay.scanned_pages(rotated(data, 90)) == []
+
+
+def test_page_found_by_code_that_the_model_cannot_fix_says_a_stronger_model_would_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data, _, header, pages = truth_doc("l_classic")
+    lose_a_line(monkeypatch, 3)
+    short = answers(pages) | {3: [pages[3][:-1]]}  # the model misses a row as well
+    res = run(data, "application/pdf", Server(header, short, saved_layout("l_classic")))
+    # the rows found by code are kept, the model's two reads are no better: the page still
+    # fails
+    assert res.pages[2].method == "layout" and res.pages[2].stronger_model
+    retry = [(n["page"], n["kind"]) for n in res.notes if n["source"] == "retry"]
+    assert retry == [(3, "stronger_model_not_called")]
+    # the witness page agreed with the code: nothing to say about it
+    assert not res.pages[0].stronger_model
+
+
+def test_witness_that_failed_on_a_page_the_code_read_well_needs_no_stronger_model() -> None:
+    data, _, header, pages = truth_doc("l_classic")
+    failing = answers(pages) | {1: [httpx.Response(500, text="boom")]}
+    res = run(data, "application/pdf", Server(header, failing, saved_layout("l_classic")))
+    assert res.layout["status"] == "unverified" and res.pages[0].method == "layout"
+    assert [n for n in res.notes if n["source"] == "retry"] == []

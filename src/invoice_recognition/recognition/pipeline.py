@@ -258,6 +258,15 @@ async def read_page(
             best, best_key = cand, key
         if not best.issues:
             break
+    else:
+        # Every attempt was made and the best one still fails its checks: this is where a
+        # stronger model would read the page again (process() notes it; none is called).
+        # Not when no request got an answer: the page_read issue says the page could not be
+        # read, and another model is not the remedy. Not when the attempts already name
+        # more than one model: escalation is configured.
+        if best is not None:
+            answered = any(a.error is None for a in attempts)
+            best.stronger_model = answered and len(set(cfg.page_models)) == 1
     if best is None:
         raise ValueError("no attempt was made: Config.page_models is empty")
     best.attempts = attempts
@@ -271,6 +280,21 @@ async def read_page(
             )
         )
     return best
+
+
+def stronger_model_note(pr: PageResult) -> JSONObject:
+    """The note for a page that still fails its checks after every attempt. Reading it once
+    more with a stronger model is where the flow would go next; that model is not called,
+    to save cost, so the page is left to the person who reviews the result."""
+    n = len(pr.attempts)
+    return {
+        "page": pr.page,
+        "kind": "stronger_model_not_called",
+        "text": f"Page {pr.page} still has problems after {n} read{'s' if n != 1 else ''}. "
+        "A stronger, more expensive model could read it again; it is not used here, to save "
+        "cost. Please check this page.",
+        "source": "retry",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -856,6 +880,11 @@ async def process(
                 else:
                     chosen = mine
                     chosen.attempts = theirs.attempts if theirs is not None else []
+                    # The rows found by code are kept because the model's re-read was no
+                    # better: the page still fails, as the model's attempts did.
+                    chosen.stronger_model = (
+                        bool(mine.issues) and theirs is not None and theirs.stronger_model
+                    )
                 if on_page:
                     on_page(chosen)
                 return chosen
@@ -878,6 +907,7 @@ async def process(
             notes = notes + [
                 {"page": None, "kind": "carry_join_failed", "text": failure, "source": "carry_in"}
             ]
+    notes += [stronger_model_note(p) for p in pages if p.stronger_model]
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []

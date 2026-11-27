@@ -7,7 +7,9 @@ authors = [
     { name = "Vlad", email = "mmosvlad@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "httpx>=0.29.0",
+]
 
 [dependency-groups]
 dev = [
@@ -27,6 +29,7 @@ required-version = ">=0.13.10"
 [tool.pytest]
 strict = true
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = ["--import-mode=importlib", "-ra"]
 
 [tool.ruff]
@@ -34,6 +37,10 @@ line-length = 100
 
 [tool.ruff.lint]
 extend-select = ["FAST"]
+
+[tool.ruff.lint.isort]
+# Shared test helpers, imported as a top-level module through pytest's pythonpath.
+known-local-folder = ["fakes"]
 
 [tool.mypy]
 strict = true

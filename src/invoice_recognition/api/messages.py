@@ -8,10 +8,24 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from decimal import Decimal
+from typing import assert_never
 
-from invoice_recognition.recognition.checks import Issue
-from invoice_recognition.recognition.pipeline import page_ranges
+from invoice_recognition.recognition.checks import Issue, ranges
+from invoice_recognition.recognition.issue_values import (
+    ControlTotalOff,
+    DocumentCoverage,
+    HeaderNotPrinted,
+    IssueForm,
+    LineProduct,
+    MissingNumbers,
+    PageCoverage,
+    RepeatedNumbers,
+    SubtotalOff,
+    TaxNoRow,
+    TaxRateOff,
+    TaxTotalOff,
+    TotalOff,
+)
 from invoice_recognition.shapes import Line
 
 logger = logging.getLogger(__name__)
@@ -143,7 +157,7 @@ def _pages(pages: list[int]) -> tuple[str, bool]:
     """("page 2" | "pages 1–3" | "pages 1 and 4", more than one)."""
     if len(pages) == 1:
         return f"page {pages[0]}", False
-    return f"pages {page_ranges(pages)}", True
+    return f"pages {ranges(pages)}", True
 
 
 def scan_unreadable(
@@ -173,15 +187,32 @@ def scan_unreadable(
 # --------------------------------------------------------------------------- #
 #
 # The flow writes its issue messages for developers ("3 x 10.0 = 30.00, but amount is
-# 31.00"). Here each code gets a sentence or two for the person who checks the invoice:
-# what was found, with the values involved, and what to check. The values are taken
-# from the flow's own message (the one place that holds them) and, for a line, from the
-# line itself. A message whose form is not recognised keeps the flow's text: a change of
-# wording in the flow can never lose an issue or break a result (the tests pin every
-# form the flow writes).
+# 31.00"). Here each issue gets a sentence or two for the person who checks the invoice:
+# what was found, with the values involved, and what to check. The values come as data:
+# the issue's page, fields and line, and the values the flow set where it computed them
+# (Issue.values, a shape of recognition/issue_values.py). A sentence that names no value
+# is chosen by the issue's code and form. An issue that has no wording, or whose wording
+# fails, keeps the flow's text and logs a warning: a wording can never lose an issue or
+# break a result.
+#
+# Transitional: the codes not yet given values are still worded from the flow's message,
+# by the patterns of ISSUE_TEXTS below.
 
-type Wording = Callable[[Issue, Line | None], str | None]
-"""(the issue, the line it is about or None) -> the text, or None: keep the flow's."""
+type Wording = Callable[[Issue, Line | None], str]
+"""(the issue, the line it is about or None) -> the text."""
+
+type Parsed = Callable[[Issue, Line | None], str | None]
+"""Transitional: a wording read from the flow's message; None: keep the flow's text."""
+
+
+# Numbers as a person reads them, as the flow's message prints the same number. An exact
+# amount (Decimal) and a measured number (float) are printed as they are: "45.0", "4.00",
+# "1E+2", "120.5".
+
+
+def _numbers(numbers: tuple[int, ...]) -> str:
+    """(2, 3, 5) -> "2, 3 and 5"."""
+    return _and([str(n) for n in numbers])
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -208,7 +239,7 @@ def _shown(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
-def _rules(*rules: tuple[str, Callable[[re.Match[str], Issue, Line | None], str]]) -> Wording:
+def _rules(*rules: tuple[str, Callable[[re.Match[str], Issue, Line | None], str]]) -> Parsed:
     """A wording from (pattern of the flow's message, text for it) pairs; the first
     pattern that matches the whole message wins."""
     compiled = [(re.compile(pattern), text) for pattern, text in rules]
@@ -222,72 +253,12 @@ def _rules(*rules: tuple[str, Callable[[re.Match[str], Issue, Line | None], str]
     return word
 
 
-def _always(text: Callable[[Issue], str]) -> Wording:
+def _always(text: Callable[[Issue], str]) -> Parsed:
     """A wording that does not need the flow's message."""
     return lambda issue, line: text(issue)
 
 
 _NUMBER = r"(-?[\d.]+(?:E[+-]?\d+)?)"
-
-
-def _difference(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    lines, subtotal, diff = m.groups()
-    return (
-        f"The line amounts add up to {lines}, but the invoice subtotal is {subtotal} "
-        f"(a difference of {diff}). A line may be missing, read twice or have a wrong amount: "
-        "check the line amounts against the invoice."
-    )
-
-
-def _total(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    subtotal, tax, total = m.groups()
-    together = Decimal(subtotal) + Decimal(tax)
-    return (
-        f"The subtotal {subtotal} plus the tax {tax} makes {together}, but the invoice total "
-        f"is {total}. Check these three figures on the invoice."
-    )
-
-
-def _line_math(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    quantity, price, product, amount, thousands = m.groups()
-    text = (
-        f"{quantity} × {price} = {product}, but the amount read is {amount}. One of the three "
-        "values was misread: check the quantity, the unit price and the amount of this line."
-    )
-    if thousands:
-        text += (
-            " The quantity may be 1000 times too small: a thousands separator may have been "
-            "read as a decimal point."
-        )
-    return text
-
-
-def _repeated(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    numbers = m.group(1).split(", ")
-    if len(numbers) == 1:
-        return (
-            f"Position number {numbers[0]} appears more than once. A line may have been read "
-            "twice: check the lines with this number."
-        )
-    return (
-        f"Position numbers {_and(numbers)} appear more than once. Lines may have been read "
-        "twice: check the lines with these numbers."
-    )
-
-
-def _missing(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    count, numbers = int(m.group(1)), m.group(2).split(", ")
-    if count == 1:
-        return (
-            f"Position number {numbers[0]} is missing from the sequence. A line may have been "
-            "skipped: check the invoice around it."
-        )
-    # The flow lists the first ten.
-    which = f"for example {_and(numbers)}" if count > len(numbers) else _and(numbers)
-    return (
-        f"{count} position numbers are missing from the sequence: {which}. Lines may have "
-        "been skipped: check the invoice around them."
-    )
 
 
 # What the columns of a line are called on an invoice.
@@ -314,23 +285,11 @@ def _named(issue: Issue, prefix: str) -> list[str]:
     return [f.removeprefix(prefix) for f in issue.fields if f.startswith(prefix)]
 
 
-def _not_printed(issue: Issue, line: Line | None) -> str | None:
-    keys = _named(issue, "line.")
-    if not keys:
-        return None
-    named = [
-        f"{_COLUMNS.get(k, k)} ({_shown(line.get(k))})" if line is not None else _COLUMNS.get(k, k)
-        for k in keys
-    ]
-    verb = _plural(len(keys), "is", "are")
-    them = _plural(len(keys), "it", "them")
-    return (
-        f"This line's {_and(named)} {verb} not printed on the page. The model may have "
-        f"misread {them}: check {them} on the invoice."
-    )
+# The document's totals (doc_sums), one line (line_math), the tax, the numbering and the
+# control totals printed among the lines (checkpoints).
 
 
-def _totals_missing(m: re.Match[str], issue: Issue, line: Line | None) -> str:
+def _totals_missing(issue: Issue, line: Line | None) -> str:
     named = [_HEADER_FIELDS.get(k, k) for k in _named(issue, "header.")]
     if not named:
         return (
@@ -344,33 +303,139 @@ def _totals_missing(m: re.Match[str], issue: Issue, line: Line | None) -> str:
     )
 
 
-def _header_not_printed(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    keys = _named(issue, "header.")
-    key = keys[0] if len(keys) == 1 else m.group(1)
-    value = m.group(2) or m.group(3)
+def _subtotal_off(v: SubtotalOff) -> str:
     return (
-        f"The {_HEADER_FIELDS.get(key, key)} read as {value} is not printed anywhere in the "
+        f"The line amounts add up to {v.lines}, but the invoice subtotal is "
+        f"{v.subtotal} (a difference of {v.difference}). A line may be "
+        "missing, read twice or have a wrong amount: check the line amounts against the "
+        "invoice."
+    )
+
+
+def _total_off(v: TotalOff) -> str:
+    return (
+        f"The subtotal {v.subtotal} plus the tax {v.tax} makes "
+        f"{v.subtotal + v.tax}, but the invoice total is {v.total}. Check "
+        "these three figures on the invoice."
+    )
+
+
+def _line_product(v: LineProduct) -> str:
+    text = (
+        f"{v.quantity} × {v.unit_price} = {v.product}, but the "
+        f"amount read is {v.amount}. One of the three values was misread: check the "
+        "quantity, the unit price and the amount of this line."
+    )
+    if v.thousands:
+        text += (
+            " The quantity may be 1000 times too small: a thousands separator may have been "
+            "read as a decimal point."
+        )
+    return text
+
+
+def _tax_no_row(v: TaxNoRow) -> str:
+    return (
+        f"Lines worth {v.base} carry {v.rate}% tax, but the invoice's tax summary has "
+        f"no {v.rate}% rate. Check the tax rates of these lines and the summary."
+    )
+
+
+def _tax_rate_off(v: TaxRateOff) -> str:
+    return (
+        f"The lines taxed at {v.rate}% add up to {v.lines}, but the "
+        f"invoice's tax summary gives {v.printed} for that rate. Check the tax rates "
+        "of the lines and the summary."
+    )
+
+
+def _tax_total_off(v: TaxTotalOff) -> str:
+    return (
+        f"The tax worked out from the lines is {v.computed}, but the invoice's tax "
+        f"total is {v.printed}. Check the tax rates of the lines and the tax total."
+    )
+
+
+def _repeated(v: RepeatedNumbers) -> str:
+    if len(v.numbers) == 1:
+        return (
+            f"Position number {v.numbers[0]} appears more than once. A line may have been read "
+            "twice: check the lines with this number."
+        )
+    return (
+        f"Position numbers {_numbers(v.numbers)} appear more than once. Lines may have been "
+        "read twice: check the lines with these numbers."
+    )
+
+
+def _missing(v: MissingNumbers) -> str:
+    if v.count == 1:
+        return (
+            f"Position number {v.numbers[0]} is missing from the sequence. A line may have "
+            "been skipped: check the invoice around it."
+        )
+    # The flow lists the first ten.
+    which = _numbers(v.numbers)
+    if v.count > len(v.numbers):
+        which = f"for example {which}"
+    return (
+        f"{v.count} position numbers are missing from the sequence: {which}. Lines may have "
+        "been skipped: check the invoice around them."
+    )
+
+
+def _control_total_off(v: ControlTotalOff) -> str:
+    return (
+        f"Line items {v.first}–{v.last} add up to {v.lines}, but the printed "
+        f'"{v.label}" is {v.printed}. A line in this range may be missing, read '
+        "twice or misread: check them."
+    )
+
+
+# Whether what was read is printed in the PDF's own text. Which cells: the issue's fields.
+
+
+def _not_printed(issue: Issue, line: Line | None) -> str:
+    keys = _named(issue, "line.")
+    if not keys:
+        raise ValueError("the issue names no cell of the line")
+    named = [
+        f"{_COLUMNS.get(k, k)} ({_shown(line.get(k))})" if line is not None else _COLUMNS.get(k, k)
+        for k in keys
+    ]
+    verb = _plural(len(keys), "is", "are")
+    them = _plural(len(keys), "it", "them")
+    return (
+        f"This line's {_and(named)} {verb} not printed on the page. The model may have "
+        f"misread {them}: check {them} on the invoice."
+    )
+
+
+def _header_not_printed(issue: Issue, v: HeaderNotPrinted) -> str:
+    [key] = _named(issue, "header.")
+    return (
+        f"The {_HEADER_FIELDS.get(key, key)} read as {v.value} is not printed anywhere in the "
         "document. It may have been misread: check it on the invoice."
     )
 
 
-def _coverage_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    page, printed, read = m.groups()
-    items = _plural(int(printed), "line item", "line items")
+def _line_items(printed: int, read: int) -> str:
+    """ "seems to have 2 line items, but 1 was read" """
+    items = _plural(printed, "line item", "line items")
+    return f"seems to have {printed} {items}, but {read} {_plural(read, 'was', 'were')} read"
+
+
+def _page_coverage(issue: Issue, v: PageCoverage) -> str:
     return (
-        f"Page {page} seems to have {printed} {items}, but {read} "
-        f"{_plural(int(read), 'was', 'were')} read. A line may be missing or read twice: "
-        "check the page."
+        f"{_page(issue).capitalize()} {_line_items(v.printed, v.read)}. A line may be missing "
+        "or read twice: check the page."
     )
 
 
-def _coverage_document(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    printed, read = m.groups()
-    items = _plural(int(printed), "line item", "line items")
+def _document_coverage(v: DocumentCoverage) -> str:
     return (
-        f"The document seems to have {printed} {items}, but {read} "
-        f"{_plural(int(read), 'was', 'were')} read. A line may be missing or read twice: "
-        "check the line items."
+        f"The document {_line_items(v.printed, v.read)}. A line may be missing or read "
+        "twice: check the line items."
     )
 
 
@@ -598,109 +663,9 @@ def _read_twice_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
     )
 
 
-ISSUE_TEXTS: dict[str, Wording] = {
-    # The document's totals.
-    "doc_sums": _rules(
-        (
-            r"supplier is missing",
-            lambda m, i, line: "The supplier's name was not read. Check who issued the invoice.",
-        ),
-        (
-            r"no line items",
-            lambda m, i, line: (
-                "No line items were read, so the totals cannot be checked against them."
-            ),
-        ),
-        (r"totals are missing in the header", _totals_missing),
-        (
-            r"some lines have no amount",
-            lambda m, i, line: (
-                "Some line items have no amount, so they cannot be checked "
-                "against the subtotal. Check the amounts of the lines."
-            ),
-        ),
-        (
-            rf"lines add up to {_NUMBER}, invoice subtotal is {_NUMBER} \(difference {_NUMBER}\)",
-            _difference,
-        ),
-        (rf"subtotal {_NUMBER} \+ tax {_NUMBER} != total {_NUMBER}", _total),
-    ),
-    # One line: quantity x unit price = amount.
-    "line_math": _rules(
-        (
-            r"quantity, unit price or amount is missing or is not a usable number",
-            lambda m, i, line: (
-                "The quantity, the unit price or the amount of this line is "
-                "missing or is not a number, so the line cannot be checked. Check it on the invoice."
-            ),
-        ),
-        (
-            (
-                rf"{_NUMBER} x {_NUMBER} = {_NUMBER}, but amount is {_NUMBER}"
-                r"( \(quantity looks 1000x too small: .*\))?"
-            ),
-            _line_math,
-        ),
-    ),
-    "tax": _rules(
-        (
-            rf"lines carry {_NUMBER}% tax on {_NUMBER}, but the invoice has no {_NUMBER}% row",
-            lambda m, i, line: (
-                f"Lines worth {m[2]} carry {m[1]}% tax, but the invoice's tax "
-                f"summary has no {m[1]}% rate. Check the tax rates of these lines and the summary."
-            ),
-        ),
-        (
-            rf"lines at {_NUMBER}% add up to {_NUMBER}, invoice says {_NUMBER}",
-            lambda m, i, line: (
-                f"The lines taxed at {m[1]}% add up to {m[2]}, but the invoice's "
-                f"tax summary gives {m[3]} for that rate. Check the tax rates of the lines and the "
-                "summary."
-            ),
-        ),
-        (
-            rf"tax computed from lines is {_NUMBER}, invoice says {_NUMBER}",
-            lambda m, i, line: (
-                f"The tax worked out from the lines is {m[1]}, but the invoice's "
-                f"tax total is {m[2]}. Check the tax rates of the lines and the tax total."
-            ),
-        ),
-    ),
-    "numbering": _rules(
-        (r"position numbers repeated: \[(.*)\]", _repeated),
-        (r"(\d+) position number\(s\) missing, e\.g\. \[(.*)\]", _missing),
-    ),
-    # A control total printed among the lines (a page subtotal, "carried forward").
-    "checkpoints": _rules(
-        (
-            rf'lines (\d+)-(\d+) add up to {_NUMBER}, but "(.*)" says {_NUMBER}',
-            lambda m, i, line: (
-                f"Line items {m[1]}–{m[2]} add up to {m[3]}, but the printed "
-                f'"{m[4]}" is {m[5]}. A line in this range may be missing, read twice or misread: '
-                "check them."
-            ),
-        ),
-    ),
-    # Whether what was read is printed in the PDF's own text.
-    # Which cells: from the issue's fields.
-    "grounding_value": _not_printed,
-    "grounding_row": _rules(
-        (
-            r"values exist on the page but not together in one row",
-            lambda m, i, line: (
-                "Each value of this line is printed on the page, but not "
-                "together in one row: the line may mix values from different rows. Check it on "
-                "the invoice."
-            ),
-        ),
-    ),
-    "grounding_header": _rules(
-        (r'(\w+) (?:"(.*)"|(\S+)) is not printed anywhere in the document', _header_not_printed),
-    ),
-    "coverage": _rules(
-        (r"page (\d+): (\d+) item rows printed, (\d+) extracted", _coverage_page),
-        (r"(\d+) item rows printed, (\d+) extracted", _coverage_document),
-    ),
+# Transitional: the codes not yet given values, worded from the flow's message. A code
+# leaves this table in the commit that gives its issues values.
+ISSUE_TEXTS: dict[str, Parsed] = {
     # A page.
     "page_read": _rules(
         (r"Page (\d+) was not read: the time limit for the document passed\.", _not_read),
@@ -868,14 +833,96 @@ ISSUE_TEXTS: dict[str, Wording] = {
 }
 
 
+# The sentences that name no value, by (code, form). A check with several sentences has a
+# form for each of them and no (code, None) key: an issue of it that has neither values
+# nor a form has no sentence and keeps the flow's text.
+_PLAIN: dict[tuple[str, IssueForm | None], Wording] = {
+    ("doc_sums", "supplier"): lambda i, line: (
+        "The supplier's name was not read. Check who issued the invoice."
+    ),
+    ("doc_sums", "no_lines"): lambda i, line: (
+        "No line items were read, so the totals cannot be checked against them."
+    ),
+    ("doc_sums", "totals_missing"): _totals_missing,
+    ("doc_sums", "amounts_missing"): lambda i, line: (
+        "Some line items have no amount, so they cannot be checked against the subtotal. "
+        "Check the amounts of the lines."
+    ),
+    ("line_math", "unusable"): lambda i, line: (
+        "The quantity, the unit price or the amount of this line is missing or is not a "
+        "number, so the line cannot be checked. Check it on the invoice."
+    ),
+    ("grounding_value", None): _not_printed,
+    ("grounding_row", None): lambda i, line: (
+        "Each value of this line is printed on the page, but not together in one row: the "
+        "line may mix values from different rows. Check it on the invoice."
+    ),
+}
+
+
+def _worded(issue: Issue, line: Line | None) -> str:
+    """The issue's text from its values, or from its code and form; raises when it has
+    neither, values of a shape not made for its code, or both."""
+    values = issue.values
+    if values is not None and (issue.form is not None or issue.check not in type(values).codes):
+        raise ValueError(f"{type(values).__name__} (form {issue.form!r}) on {issue.check}")
+    match values:
+        case None:
+            return _PLAIN[issue.check, issue.form](issue, line)
+        case SubtotalOff():
+            return _subtotal_off(values)
+        case TotalOff():
+            return _total_off(values)
+        case LineProduct():
+            return _line_product(values)
+        case TaxNoRow():
+            return _tax_no_row(values)
+        case TaxRateOff():
+            return _tax_rate_off(values)
+        case TaxTotalOff():
+            return _tax_total_off(values)
+        case RepeatedNumbers():
+            return _repeated(values)
+        case MissingNumbers():
+            return _missing(values)
+        case ControlTotalOff():
+            return _control_total_off(values)
+        case HeaderNotPrinted():
+            return _header_not_printed(issue, values)
+        case PageCoverage():
+            return _page_coverage(issue, values)
+        case DocumentCoverage():
+            return _document_coverage(values)
+        case _:
+            assert_never(values)
+
+
+def _new(issue: Issue) -> bool:
+    """Transitional: the issue is worded from its values or form, never from its message."""
+    return issue.values is not None or (issue.check, issue.form) in _PLAIN
+
+
+def _parsed(issue: Issue, line: Line | None) -> str:
+    """Transitional: the text from the flow's message, or the message itself."""
+    word = ISSUE_TEXTS.get(issue.check)
+    text = word(issue, line) if word is not None else None
+    return text if text is not None else issue.message
+
+
 def issue_text(issue: Issue, line: Line | None = None) -> str:
     """The message of an issue for a person; line: the line the issue is about, if any."""
-    word = ISSUE_TEXTS.get(issue.check)
-    if word is None:
-        return issue.message
     try:
-        text = word(issue, line)
+        # Chosen before any wording runs: an issue with values or a form is never read
+        # from its message, even when its wording fails.
+        if _new(issue):
+            return _worded(issue, line)
+        return _parsed(issue, line)
     except Exception:  # fault boundary: a wording must never cost the document its result
-        logger.warning("issue %s could not be worded", issue.check, exc_info=True)
+        logger.warning(
+            "issue %s (form %r, values %s) could not be worded",
+            issue.check,
+            issue.form,
+            type(issue.values).__name__,
+            exc_info=True,
+        )
         return issue.message
-    return text if text is not None else issue.message

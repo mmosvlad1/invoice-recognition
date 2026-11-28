@@ -1,10 +1,12 @@
 """Deterministic checks of an extraction."""
 
+import json
 import math
 import random
 import re
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -27,6 +29,7 @@ from invoice_recognition.recognition.checks import (
     ranges,
 )
 from invoice_recognition.recognition.evidence import CENT, build, money
+from invoice_recognition.recognition.issue_values import SubtotalOff
 from invoice_recognition.shapes import Checkpoint, JSONObject, Line
 
 from fakes import header_for, line
@@ -99,6 +102,27 @@ def test_issue_json_with_fields_suggestions_and_what_it_follows_from() -> None:
     # The JSON is a copy: changing it leaves the issue as it was.
     issue.to_json()["suggestions"][0]["set"]["line.amount"] = 1
     assert issue.suggestions == [suggestion]
+
+
+def test_issue_json_is_the_same_with_values_or_a_form() -> None:
+    plain = Issue(
+        "doc_sums",
+        "m",
+        line=1,
+        page=2,
+        line_no=3,
+        fields=["header.subtotal"],
+        suggestions=[{"set": {"header.subtotal": 1.5}, "source": "arithmetic"}],
+        follows_from=[0],
+    )
+    values = SubtotalOff(Decimal("1.5"), Decimal(3), Decimal("-1.5"))
+    for worded in (replace(plain, values=values), replace(plain, form="totals_missing")):
+        out = worded.to_json()
+        # The same keys in the same order and the same values: the same bytes.
+        assert json.dumps(out) == json.dumps(plain.to_json())
+        out["suggestions"][0]["set"]["header.subtotal"] = 9
+        out["follows_from"].append(5)
+        assert worded.suggestions == plain.suggestions and worded.follows_from == [0]
 
 
 # --------------------------------------------------------------------------- #

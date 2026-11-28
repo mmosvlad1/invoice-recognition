@@ -87,6 +87,14 @@ class TaxTotalOff:
 
 
 @dataclass(frozen=True, slots=True)
+class RateUnreadable:
+    """A row of the tax summary whose rate is not a number; printed: its base."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"tax"})
+    printed: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class RepeatedNumbers:
     """Position numbers printed on more than one line: the first ten, in order."""
 
@@ -316,6 +324,7 @@ type IssueValues = (
     | TaxNoRow
     | TaxRateOff
     | TaxTotalOff
+    | RateUnreadable
     | RepeatedNumbers
     | MissingNumbers
     | ControlTotalOff

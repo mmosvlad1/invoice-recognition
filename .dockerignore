@@ -1,0 +1,19 @@
+# The build context is an allowlist: only what the image needs, so .git, data/, docs/, caches and stray files
+# at the top never enter it. Inside the allowed folders everything enters unless excluded below: caches, and
+# anything that looks like a secret (a file under src/.../static would even be served). .env.example is kept
+# because a settings test reads it in the test stage.
+*
+!src
+!tests
+!scripts
+!pyproject.toml
+!uv.lock
+!README.md
+!.python-version
+**/__pycache__
+**/.DS_Store
+**/.env*
+!.env.example
+**/id_rsa*
+**/*.pem
+**/*.key

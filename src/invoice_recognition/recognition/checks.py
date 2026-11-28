@@ -413,7 +413,7 @@ def check_numbering(doc: Doc) -> list[Issue]:
                 "numbering",
                 f"position numbers repeated: {shown}",
                 fields=["line.line_no"],
-                values=RepeatedNumbers(tuple(shown)),
+                values=RepeatedNumbers(len(dup), tuple(shown)),
             )
         )
     present = set(ints)

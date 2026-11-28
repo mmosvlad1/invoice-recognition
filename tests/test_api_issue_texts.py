@@ -290,10 +290,10 @@ def test_numbering() -> None:
 
 def test_more_than_ten_repeated_numbers() -> None:
     [issue] = checks.check_numbering(doc([line(n) for n in range(1, 13) for _ in (1, 2)]))
-    # The flow lists the first ten of the twelve, and the text reads them as all.
+    # The flow lists the first ten of the twelve.
     assert text(issue) == (
-        "Position numbers 1, 2, 3, 4, 5, 6, 7, 8, 9 and 10 appear more than once. Lines may "
-        "have been read twice: check the lines with these numbers."
+        "12 position numbers appear more than once, for example 1, 2, 3, 4, 5, 6, 7, 8, 9 and "
+        "10. Lines may have been read twice: check the lines with these numbers."
     )
 
 

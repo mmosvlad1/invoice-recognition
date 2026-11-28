@@ -280,6 +280,92 @@ def test_total_deadline_stops_a_slow_stream() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# How a request failed (LLMResult.failure, LLMResult.status)
+# --------------------------------------------------------------------------- #
+
+
+def events(*items: JSONObject) -> str:
+    return "".join(f"data: {json.dumps(e)}\n\n" for e in items)
+
+
+class _BreakingStream(httpx.AsyncByteStream):
+    """Sends the start of an answer, then the connection breaks."""
+
+    def __init__(self, error: type[httpx.TransportError]) -> None:
+        self.error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield events({"choices": [{"delta": {"content": '{"rows": ['}}]}).encode()
+        raise self.error("connection lost")
+
+
+@pytest.mark.parametrize("status", [400, 404, 408, 429, 500, 503])
+def test_a_refused_request_keeps_its_status(status: int) -> None:
+    res = call(answer("upstream error", status=status))
+    assert (res.failure, res.status) == ("http", status)
+    assert res.error == f"HTTP {status}: upstream error"  # the text as before
+
+
+def test_an_error_event_keeps_its_code_and_the_text_before_it() -> None:
+    before = {"choices": [{"delta": {"content": '{"rows": ['}}]}
+    res = call(answer(events(before, {"error": {"code": 502, "message": "gone"}})))
+    assert (res.failure, res.status) == ("stream", 502)
+    assert res.error == '{"code": 502, "message": "gone"}' and res.text == '{"rows": ['
+
+
+@pytest.mark.parametrize(
+    "error", [{"code": "server_error"}, {"code": True}, {"message": "no code"}, "gone", [502]]
+)
+def test_an_error_event_whose_code_is_not_an_integer_has_no_status(error: object) -> None:
+    res = call(answer(events({"error": error})))
+    assert (res.failure, res.status) == ("stream", None)
+
+
+def test_the_calls_own_timeout_is_a_timeout_and_the_clients_is_the_connections() -> None:
+    slow = call(lambda request: httpx.Response(200, stream=_SlowStream()), timeout_s=0.2)
+    assert (slow.failure, slow.status, slow.timed_out) == ("timeout", None, True)
+    assert slow.text == '{"rows": ['
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    res = call(handler)
+    assert (res.failure, res.status, res.timed_out) == ("network", None, False)
+    assert res.error is not None and re.fullmatch(r"timeout after \d+s", res.error)
+
+
+@pytest.mark.parametrize("error", [httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError])
+def test_a_broken_connection_is_a_network_failure(error: type[httpx.TransportError]) -> None:
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise error("refused", request=request)
+
+    res = call(refused)
+    assert (res.failure, res.status, res.error) == ("network", None, f"{error.__name__}: refused")
+    res = call(lambda request: httpx.Response(200, stream=_BreakingStream(error)))
+    assert (res.failure, res.status) == ("network", None)
+    assert res.text == '{"rows": ['  # what came before the break is kept
+
+
+def test_a_stream_with_nothing_readable_is_malformed() -> None:
+    res = call(answer("data: {broken\n\ndata: [1]\n\ndata: [DONE]\n\n"))
+    assert (res.failure, res.status) == ("malformed", None)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        sse('{"rows": []}'),
+        sse(""),  # an empty answer is not a failed request: the caller judges it
+        "data: [DONE]\n\n",
+        "data: {broken\n\n" + sse('{"rows": []}'),
+    ],
+)
+def test_an_answer_that_came_is_no_failure(body: str) -> None:
+    res = call(answer(body))
+    assert (res.error, res.failure, res.status) == (None, None, None)
+
+
+# --------------------------------------------------------------------------- #
 # Reading the answer
 # --------------------------------------------------------------------------- #
 

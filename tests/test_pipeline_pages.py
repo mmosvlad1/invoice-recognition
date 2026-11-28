@@ -1,10 +1,12 @@
 """The page-by-page flow against a fake OpenRouter (httpx.MockTransport). No network, no key."""
 
+import asyncio
 import json
 
 import httpx
 import pytest
 
+from invoice_recognition.llm import LLMResult
 from invoice_recognition.recognition import pipeline as pl
 from invoice_recognition.recognition.carryover import carry_prompt
 from invoice_recognition.recognition.checks import Issue
@@ -117,6 +119,23 @@ def test_exception_on_one_page_does_not_fail_the_document() -> None:
     failed = [i for i in res.issues if i.check == "page_read"]
     assert len(failed) == 1 and failed[0].page == 2 and "stream blew up" in failed[0].message
     assert res.status == "needs_review"
+
+
+def test_an_exception_inside_a_request_is_a_failed_request_that_says_so() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("stream blew up")
+
+    async def go() -> LLMResult:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            res, _ = await pl._call(client, "vendor/model", "Read this.", None, 100, 5.0)
+            return res
+
+    res = asyncio.run(go())
+    assert (res.error, res.failure, res.status) == (
+        "RuntimeError: stream blew up",
+        "exception",
+        None,
+    )
 
 
 def test_malformed_stream_on_one_page_does_not_fail_the_document() -> None:

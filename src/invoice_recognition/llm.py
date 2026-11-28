@@ -13,7 +13,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -24,6 +24,13 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # by `complete` on every request. A stream that keeps sending is bounded by the
 # total deadline of `complete` instead.
 REQUEST_TIMEOUT_S = 120.0
+
+type Failure = Literal["http", "stream", "timeout", "network", "malformed", "exception"]
+"""How a request failed, when it did: refused with an HTTP status ("http"); an error event
+in the stream ("stream"); out of the call's own timeout_s ("timeout", LLMResult.timed_out);
+the connection, the HTTP client's own timeouts included ("network"); a stream with nothing
+readable in it ("malformed"); an exception the caller caught ("exception", set by the
+caller, never here)."""
 
 type ContentPart = dict[str, Any]
 """One element of a chat message's content list (a file or an image)."""
@@ -46,7 +53,16 @@ class LLMResult:
     duration_s: float = 0.0
     provider: str | None = None
     error: str | None = None
-    timed_out: bool = False  # ended by the call's own timeout_s (not the HTTP client's)
+    # Set together with `error`: how the request failed, and the HTTP status of a refused
+    # request or the integer code of an error event in the stream (None: none, or not an
+    # integer). Never sent anywhere: they tell a provider's failure from ours.
+    failure: Failure | None = None
+    status: int | None = None
+
+    @property
+    def timed_out(self) -> bool:
+        """Ended by the call's own timeout_s (not the HTTP client's)."""
+        return self.failure == "timeout"
 
 
 def openrouter_client(
@@ -127,6 +143,7 @@ async def complete(
             if r.status_code != 200:
                 text = (await r.aread()).decode(errors="replace")
                 res.error = f"HTTP {r.status_code}: {text[:400]}"
+                res.failure, res.status = "http", r.status_code
                 return res
             async for raw in r.aiter_lines():
                 if not raw.startswith("data: "):
@@ -143,6 +160,7 @@ async def complete(
                     continue
                 if event.get("error"):
                     res.error = json.dumps(event["error"])[:400]
+                    res.failure, res.status = "stream", _code_of(event["error"])
                     break
                 res.provider = event.get("provider") or res.provider
                 for choice in event.get("choices") or []:
@@ -159,18 +177,28 @@ async def complete(
                     res.reasoning_tokens = details.get("reasoning_tokens") or 0
                     res.cost_usd = usage.get("cost")
     except TimeoutError:
-        res.timed_out = True
         res.error = f"timeout after {time.monotonic() - started:.0f}s"
-    except httpx.TimeoutException:
+        res.failure = "timeout"
+    except httpx.TimeoutException:  # the HTTP client's own limit: the connection's failure
         res.error = f"timeout after {time.monotonic() - started:.0f}s"
+        res.failure = "network"
     except httpx.HTTPError as e:
         res.error = f"{type(e).__name__}: {e}"
+        res.failure = "network"
     finally:
         res.duration_s = time.monotonic() - started
         res.text = "".join(chunks)
     if malformed and not chunks and not res.error:
         res.error = f"malformed stream: {malformed} chunk(s) could not be parsed, no text received"
+        res.failure = "malformed"
     return res
+
+
+def _code_of(error: object) -> int | None:
+    """The code of an error event in the stream when it is an integer (OpenRouter sends the
+    HTTP status there); None for anything else, a bool included."""
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, int) and not isinstance(code, bool) else None
 
 
 # What json.loads raises for text it refuses: broken JSON (JSONDecodeError, a ValueError),

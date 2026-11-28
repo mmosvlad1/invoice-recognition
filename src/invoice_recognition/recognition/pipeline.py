@@ -53,10 +53,12 @@ A backup model of another provider, when Config.fallback_model names one: a requ
 first reader whose provider fails (fallback.py: an outage, a timeout, nothing usable
 coming back) is sent once more, the same, to the backup (_ask), and its answer is one more
 attempt. From then on the document's requests for the failed model go to the backup
-alone - but a page of a scan with a quality warning, which is never sent to it and stays
-with the first model. What the result keeps from the backup (an answer of it that did
-not fail) is named in one note "fallback_model". With a first provider that answers,
-nothing changes: the same requests, in the same order, the same result.
+alone - but a page of a scan or a photo with a quality warning, which is never sent to it
+and stays with the first model. What the result keeps from the backup (an answer of it
+that did not fail) is named in one note "fallback_model" - but for the line items of a
+photo, which get a warning issue "fallback_model" on their item codes instead. With a
+first provider that answers, nothing changes: the same requests, in the same order, the
+same result.
 """
 
 import asyncio
@@ -922,6 +924,22 @@ def fallback_note(model: str, pages: list[int], header: bool, layout: bool) -> J
         "header": header,
         "layout": layout,
     }
+
+
+def fallback_photo_issue(model: str) -> Issue:
+    """The warning on a photo whose line items the backup model read. Measured on photos of
+    one invoice: sharp ones it read without a mistake, but on a soft one it returned wrong
+    item codes with totals that still add up - nothing else would flag them."""
+    return Issue(
+        "fallback_model",
+        f"The usual reading model was not available, so a backup model, {model}, read this "
+        "photo. On photos that are not perfectly sharp it was seen to misread item codes "
+        "(SKUs) without any other sign. Please check the item codes.",
+        page=1,
+        severity="warning",
+        fields=["line.sku"],
+        values=iv.BackupModel(model),
+    )
 
 
 def stronger_model_note(pr: PageResult) -> JSONObject:
@@ -1899,9 +1917,11 @@ async def _read(
     doubtful = set(scan_issues) - set(skipped)  # pages of a scan read with a quality warning
     if second_model is not None and prep.is_pdf and evidence is None:
         second_pages = [p for p in range(1, n + 1) if p not in skipped and p not in doubtful]
-    # The backup model reads what the second reader would: no page with a quality warning
-    # (gated, see one() below); a photo not at all.
-    backup = Backup.of(cfg) if prep.is_pdf else None
+    # The backup model reads what the second reader would: no page of a scan with a quality
+    # warning (gated, see one() below), and no photo with one - on soft photos it misread
+    # item codes with no other sign. A photo it reads is flagged (fallback_photo_issue).
+    photo_warned = not prep.is_pdf and quality.get("verdict") == "warn"
+    backup = None if photo_warned else Backup.of(cfg)
     # Second readings have a limit of their own, so a retry of the first reader never
     # waits behind them for the document's; they yield every shared slot to the first
     # readers (Gate.enter). They share the deadline, but not its verdict.
@@ -2122,7 +2142,10 @@ async def _read(
     by_backup = [p.page for p in pages if p.method == "model" and p.by_backup]
     # The layout counts only when rows found by it are kept.
     layout_by_backup = layout_by_backup and any(p.method == "layout" for p in pages)
-    if backup is not None and (by_backup or header_by_backup or layout_by_backup):
+    # A photo whose line items the backup read gets an issue instead of the note.
+    photo_by_backup = not prep.is_pdf and bool(by_backup)
+    read_any = bool(by_backup) or header_by_backup or layout_by_backup
+    if backup is not None and read_any and not photo_by_backup:
         notes.append(fallback_note(backup.model, by_backup, header_by_backup, layout_by_backup))
 
     lines: list[Line] = []
@@ -2155,6 +2178,8 @@ async def _read(
         issues.append(deadline_issue(cfg.deadline_s, unread, header_read))
     # Last: every other issue keeps its position (its id) with or without a second reading.
     issues += second_issues
+    if backup is not None and photo_by_backup:  # after them: no other issue moves either
+        issues.append(fallback_photo_issue(backup.model))
     link_issues(pages, doc, issues, document)
 
     code_read = read_by_code if any(p.method == "layout" for p in pages) else None

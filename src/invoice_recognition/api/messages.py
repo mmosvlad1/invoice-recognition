@@ -12,6 +12,7 @@ from typing import assert_never
 from invoice_recognition.recognition.checks import Issue, ranges
 from invoice_recognition.recognition.issue_values import (
     AttemptCounts,
+    BackupModel,
     ControlTotalOff,
     Coverage,
     CutByDeadline,
@@ -739,6 +740,17 @@ def _second_page(issue: Issue, v: SecondPage) -> str:
     return " ".join(text)
 
 
+# A photo read by the backup model (pipeline.fallback_photo_issue).
+
+
+def _backup_model(v: BackupModel) -> str:
+    return (
+        f"A backup model ({v.model}) read this photo because the usual one was not available. "
+        "On photos that are not perfectly sharp it has misread item codes without any other "
+        "sign, so please check the item codes against the photo."
+    )
+
+
 # The sentences that name no value, by (code, form). A check with several sentences has a
 # form for each of them and no (code, None) key: an issue of it that has neither values
 # nor a form has no sentence and keeps the flow's text (and logs a warning). So does, on
@@ -844,6 +856,8 @@ def _worded(issue: Issue, line: Line | None) -> str:
             return _second_column(issue, values)
         case SecondPage():
             return _second_page(issue, values)
+        case BackupModel():
+            return _backup_model(values)
         case _:
             assert_never(values)
 

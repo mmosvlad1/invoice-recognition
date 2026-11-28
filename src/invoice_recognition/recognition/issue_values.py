@@ -310,6 +310,20 @@ class SecondPage:
     absent: tuple[int, ...]
 
 
+# --------------------------------------------------------------------------- #
+# A photo read by the backup model, because the provider of the first one failed
+# (pipeline._read)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class BackupModel:
+    """The backup model that read the line items of a photo."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"fallback_model"})
+    model: str
+
+
 type IssueValues = (
     SubtotalOff
     | TotalOff
@@ -336,6 +350,7 @@ type IssueValues = (
     | SecondRow
     | SecondColumn
     | SecondPage
+    | BackupModel
 )
 
 # Which of a check's sentences that name no value an issue is; only for a check that has

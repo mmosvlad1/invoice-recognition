@@ -1315,8 +1315,11 @@ async def read_header(
     """Read the header, a second time when the first answer lacks the total or the
     supplier. Returns (header, attempts, whether an attempt ran to its end).
 
-    At the deadline the attempts stop and the header of the last attempt that ran to its
-    end is kept ({} when there is none). A cut attempt's answer is never used: a header
+    The header kept is the best one read: a later answer replaces it unless that answer
+    is empty, or failed (an error) while an earlier one gave something. So a second
+    attempt that fails never throws away what the first one read.
+
+    At the deadline the attempts stop. A cut attempt's answer is never used: a header
     cannot be salvaged from a part of it, as page rows can."""
     if gate is None:
         gate = Gate()
@@ -1334,7 +1337,9 @@ async def read_header(
         attempts.append(_attempt(res, 0, 0 if answer else 1))
         if cut:
             break
-        header, answered = answer, True
+        answered = True
+        if answer and (res.error is None or not header):
+            header = answer
         if header.get("total") is not None and header.get("supplier_name"):
             break
     return header, attempts, answered

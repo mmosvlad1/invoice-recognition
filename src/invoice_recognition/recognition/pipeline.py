@@ -268,7 +268,11 @@ class Gate:
     page requests; that one is passed to enter() and leave() as `own`.
 
     deadline: the overall deadline of the document on the time.monotonic() clock (None:
-    none). hit: a request was not sent, or was cut short, because it passed."""
+    none). hit: the deadline was reached by a timer - a request was not sent, or was cut
+    short, because of it. From then on the deadline counts as passed whatever the clock
+    says: an event loop's timer can fire before its time (asyncio up to one tick of the
+    clock, 1 ms in Docker Desktop's Linux; uvloop up to about 2 ms), and the reading must
+    not go on in that gap."""
 
     slots: asyncio.Semaphore | None = None
     deadline: float | None = None
@@ -278,15 +282,7 @@ class Gate:
         return None if self.deadline is None else self.deadline - time.monotonic()
 
     def passed(self) -> bool:
-        return self.deadline is not None and time.monotonic() >= self.deadline
-
-    def cut(self, res: LLMResult) -> bool:
-        """The request ended in an error when the deadline had passed: it was cut short by
-        it. Told by the clock, right after the request returns, never by the error text."""
-        if res.error is not None and self.passed():
-            self.hit = True
-            return True
-        return False
+        return self.hit or (self.deadline is not None and time.monotonic() >= self.deadline)
 
     async def enter(self, own: asyncio.Semaphore | None, optional: bool = False) -> None:
         """Wait for the document's own limit, then for a shared slot: always in this
@@ -369,7 +365,7 @@ async def _call(
     own: asyncio.Semaphore | None = None,
     plugins: list[JSONObject] | None = None,
     optional: bool = False,
-) -> LLMResult:
+) -> tuple[LLMResult, bool]:
     """complete() that never raises: whatever goes wrong inside one request is
     that request's error, not the document's. part=None: a text-only request.
     plugins: OpenRouter plugins of the request (None: none, the body as before).
@@ -378,26 +374,36 @@ async def _call(
     Every wait before a request happens here: for `own`, the limit of the document on its
     page requests (None for the header and the layout), and for a shared slot of the
     gate. Raises DeadlinePassed when the request cannot be sent before the deadline; a
-    request that is sent ends at the deadline at the latest."""
+    request that is sent ends at the deadline at the latest.
+
+    Also returns whether the deadline cut the request short. That is told by the call
+    itself, never by the clock afterwards or the error text: the timeout the request ran
+    out of was the time left until the deadline, not its own. The gate is then hit, so
+    nothing more is sent, even if the timer fired a moment before the deadline."""
     if gate is None:
         gate = Gate()
     await gate.enter(own, optional)
     try:
         left = gate.remaining()
-        return await complete(
+        bounded = left is not None and left < timeout_s
+        res = await complete(
             client,
             model,
             prompt,
             [part] if part else [],
             max_tokens=max_tokens,
-            timeout_s=timeout_s if left is None else min(timeout_s, left),
+            timeout_s=left if left is not None and bounded else timeout_s,
             plugins=plugins,
         )
     except Exception as e:  # fault boundary: one request
         logger.warning("request to %s failed", model, exc_info=True)
-        return LLMResult(model=model, error=f"{type(e).__name__}: {e}")
+        return LLMResult(model=model, error=f"{type(e).__name__}: {e}"), False
     finally:
         gate.leave(own, optional)
+    cut = bounded and res.timed_out
+    if cut:
+        gate.hit = True
+    return res, cut
 
 
 def _attempt(res: LLMResult, lines: int, issues: int) -> Attempt:
@@ -450,7 +456,7 @@ async def read_page(
     stopped = completed = False
     for model in cfg.page_models:
         try:
-            res = await _call(
+            res, cut = await _call(
                 client,
                 model,
                 prompt,
@@ -463,7 +469,6 @@ async def read_page(
         except DeadlinePassed:
             stopped = True
             break  # no stronger-model note: the page was stopped by the deadline
-        cut = gate.cut(res)
         completed = completed or not cut
         parsed = parse_json(res.text)
         rows = (parsed or {}).get("rows")
@@ -577,7 +582,7 @@ async def read_second(
     stopped by the deadline is never the document's deadline_exceeded: nothing reads that
     gate's hit."""
     try:
-        res = await _call(
+        res, _ = await _call(
             client,
             model,
             EXTRACT_PAGE.format(page=page, total=total),
@@ -770,12 +775,11 @@ async def ask_layout(
     if gate is None:
         gate = Gate()
     try:
-        res = await _call(
+        res, _ = await _call(
             client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90, gate=gate
         )
     except DeadlinePassed:
         return None, [], "the overall deadline passed"
-    gate.cut(res)
     raw = None if res.error else parse_json(res.text)
     error = res.error or (
         None if raw is not None else f"answer is not valid JSON (finish={res.finish_reason})"
@@ -1321,10 +1325,11 @@ async def read_header(
     answered = False
     for _ in range(2):
         try:
-            res = await _call(client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate)
+            res, cut = await _call(
+                client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate
+            )
         except DeadlinePassed:
             break
-        cut = gate.cut(res)
         answer = parse_json(res.text) or {}
         attempts.append(_attempt(res, 0, 0 if answer else 1))
         if cut:

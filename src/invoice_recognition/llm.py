@@ -46,6 +46,7 @@ class LLMResult:
     duration_s: float = 0.0
     provider: str | None = None
     error: str | None = None
+    timed_out: bool = False  # ended by the call's own timeout_s (not the HTTP client's)
 
 
 def openrouter_client(
@@ -157,7 +158,10 @@ async def complete(
                     details = usage.get("completion_tokens_details") or {}
                     res.reasoning_tokens = details.get("reasoning_tokens") or 0
                     res.cost_usd = usage.get("cost")
-    except TimeoutError, httpx.TimeoutException:
+    except TimeoutError:
+        res.timed_out = True
+        res.error = f"timeout after {time.monotonic() - started:.0f}s"
+    except httpx.TimeoutException:
         res.error = f"timeout after {time.monotonic() - started:.0f}s"
     except httpx.HTTPError as e:
         res.error = f"{type(e).__name__}: {e}"

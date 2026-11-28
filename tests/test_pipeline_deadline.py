@@ -9,7 +9,9 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
+from importlib.util import find_spec
+from typing import Any
 
 import httpx
 import pytest
@@ -26,6 +28,28 @@ DEADLINE = 0.5
 SLOW = [30.0]  # far beyond the deadline
 CUT = re.compile(r"timeout after \d+s")
 
+# Every test here runs on asyncio's own loop and on uvloop, which the app is served on when
+# it is installed (tests/conftest.py): their timers fire early by different amounts.
+type LoopFactory = Callable[[], asyncio.AbstractEventLoop] | None
+LOOPS: dict[str, LoopFactory] = {"asyncio": None}
+if find_spec("uvloop") is not None:
+    import uvloop
+
+    LOOPS["uvloop"] = uvloop.new_event_loop
+_loop: list[LoopFactory] = [None]
+
+
+@pytest.fixture(autouse=True, params=sorted(LOOPS))
+def event_loop_kind(request: pytest.FixtureRequest) -> str:
+    _loop[0] = LOOPS[request.param]
+    name: str = request.param
+    return name
+
+
+def on_loop[T](coro: Coroutine[Any, Any, T]) -> T:
+    """asyncio.run() on the loop of this run of the test."""
+    return asyncio.run(coro, loop_factory=_loop[0])
+
 
 def cfg(concurrency: int = 12) -> Config:
     """Blank drawn pages, not measured, and the deadline."""
@@ -41,7 +65,7 @@ def run(data: bytes, server: Handler | SlowServer, config: Config) -> tuple[Resu
             res = await pl.process(data, "application/pdf", client, config)
             return res, time.monotonic() - started
 
-    return asyncio.run(go())
+    return on_loop(go())
 
 
 def rows_by_page(pages: int) -> dict[int, list[Answer]]:
@@ -170,7 +194,7 @@ def test_waiting_for_a_shared_slot_ends_at_the_deadline_and_spares_the_holder() 
                 await held
             return res, took, in_flight, cancelled
 
-    res, took, in_flight, cancelled = asyncio.run(go())
+    res, took, in_flight, cancelled = on_loop(go())
     assert took < 2
     assert waiter.arrived == []  # A sent nothing
     assert in_flight == 1 and cancelled == []  # B's request was still running, untouched
@@ -241,6 +265,91 @@ def test_a_layout_answer_after_the_deadline_leaves_the_other_pages_unread() -> N
     assert res.status == "failed"
 
 
+LAG = 0.3
+
+
+class LaggingGate(pl.Gate):
+    """A gate whose clock runs LAG seconds behind the event loop's timers: what an early
+    timer looks like (asyncio fires one up to a tick early, uvloop up to about 2 ms), made
+    large and certain. Timeouts are still set from the true time left."""
+
+    def passed(self) -> bool:
+        late = self.deadline is not None and time.monotonic() - LAG >= self.deadline
+        return self.hit or late
+
+
+class Never:
+    """A fake server whose answer never comes: each request waits for an event that is
+    never set, until the client gives up on it. arrived: the kind of every request."""
+
+    def __init__(self) -> None:
+        self.arrived: list[int | str] = []
+        self.event = asyncio.Event()
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.arrived.append(kind_of(request))
+        await self.event.wait()
+        raise AssertionError("never answered")
+
+
+def test_a_request_cut_by_the_deadline_hits_the_gate_whatever_the_clock_says() -> None:
+    # The request's timeout is the time left until the deadline, and it runs out: the call
+    # says it was cut by the deadline, and nothing is sent after it, though the gate's
+    # clock does not yet show the deadline as passed.
+    server = Never()
+
+    async def go() -> tuple[bool, bool, bool, bool]:
+        gate = LaggingGate(deadline=time.monotonic() + 0.2)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as client:
+            res, cut = await pl._call(client, "m", "p", None, 100, 90, gate=gate)
+            late = time.monotonic() - LAG < (gate.deadline or 0)  # the gate's clock: not yet
+            with pytest.raises(pl.DeadlinePassed):
+                await pl._call(client, "m", "p", None, 100, 90, gate=gate)
+        return cut, res.timed_out, gate.hit, late
+
+    assert on_loop(go()) == (True, True, True, True)
+    assert len(server.arrived) == 1  # one request; the second was never sent
+
+
+def test_a_request_out_of_its_own_timeout_is_not_cut_by_the_deadline() -> None:
+    # Its own timeout is shorter than the time left: it timed out, the deadline did not
+    # cut it, and the next request is sent.
+    server = Never()
+
+    async def go() -> tuple[bool, bool, bool]:
+        gate = pl.Gate(deadline=time.monotonic() + 60)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as client:
+            res, cut = await pl._call(client, "m", "p", None, 100, 0.1, gate=gate)
+            again, _ = await pl._call(client, "m", "p", None, 100, 0.1, gate=gate)
+        return cut, res.timed_out and again.timed_out, gate.hit
+
+    assert on_loop(go()) == (False, True, False)
+    assert len(server.arrived) == 2
+
+
+def test_a_layout_cut_by_the_deadline_sends_no_other_page_whatever_the_clock_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The layout request runs out of the time left; the gate's clock still says "not yet"
+    # for LAG seconds, long enough for a server that answers at once to have every other
+    # page read. None is asked.
+    monkeypatch.setattr(pl, "Gate", LaggingGate)
+    data, _, header, pages = truth_doc("m_grouped")
+    answers: dict[int, list[Answer]] = {p: [rows] for p, rows in pages.items()}
+    server = SlowServer(Server(header, answers, saved_layout("m_grouped")), {"layout": SLOW})
+
+    async def go() -> Result:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as client:
+            return await pl.process(data, "application/pdf", client, Config(deadline_s=DEADLINE))
+
+    res = on_loop(go())
+
+    assert dict(server.calls) == {"header": 1, "layout": 1, 1: 1}  # no fallback page asked
+    assert [p.page for p in res.pages if p.deadline_unread] == [2, 3, 4]
+    assert deadline_message(res) == f"{START} Pages 2–4 were not read."
+    assert res.status == "failed"
+
+
 def test_a_witness_read_cut_by_the_deadline_leaves_the_rows_unconfirmed() -> None:
     data, truth, header, pages = truth_doc("s_classic")
     answers: dict[int, list[Answer]] = {p: [rows] for p, rows in pages.items()}
@@ -292,7 +401,7 @@ def test_gate_after_the_deadline_takes_no_slot() -> None:
             await gate.enter(own)
         return gate.hit, own.locked() or shared.locked()
 
-    assert asyncio.run(go()) == (True, False)
+    assert on_loop(go()) == (True, False)
 
 
 def test_gate_without_a_deadline_waits_and_gives_back() -> None:
@@ -304,7 +413,7 @@ def test_gate_without_a_deadline_waits_and_gives_back() -> None:
         gate.leave(own)
         return taken, own.locked() or shared.locked(), gate.hit
 
-    assert asyncio.run(go()) == (True, False, False)
+    assert on_loop(go()) == (True, False, False)
 
 
 def test_gate_gives_up_waiting_for_a_shared_slot_at_the_deadline() -> None:
@@ -316,7 +425,7 @@ def test_gate_gives_up_waiting_for_a_shared_slot_at_the_deadline() -> None:
             await gate.enter(own)
         return time.monotonic() - started, own.locked(), gate.hit
 
-    waited, own_locked, hit = asyncio.run(go())
+    waited, own_locked, hit = on_loop(go())
     assert 0.05 < waited < 1 and not own_locked and hit
 
 
@@ -332,7 +441,7 @@ def test_gate_cancelled_while_waiting_for_a_shared_slot_gives_back_its_own() -> 
             await waiting
         return own.locked()
 
-    assert asyncio.run(go()) is False
+    assert on_loop(go()) is False
 
 
 class _PassesWhileWaiting(pl.Gate):
@@ -355,4 +464,4 @@ def test_gate_whose_deadline_passes_after_taking_the_slots_gives_them_back() -> 
             await gate.enter(own)
         return own.locked() or shared.locked(), gate.hit
 
-    assert asyncio.run(go()) == (False, True)
+    assert on_loop(go()) == (False, True)

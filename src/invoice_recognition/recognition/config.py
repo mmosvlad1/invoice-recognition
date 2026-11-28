@@ -93,3 +93,20 @@ class Config:
     # A second reading still unanswered after this many seconds is given up (no retry).
     # The longest measured page took 25 s.
     second_reading_timeout_s: float = 60.0
+    # When the provider of a first reader's model fails (fallback.provider_failed: an
+    # outage, a timeout, an empty or cut-off answer, HTTP 408, 429 or 5xx), the same request
+    # - the same prompt and file - is sent once to this model of another provider, and its
+    # answer is one more attempt of that request, chosen between as any other. After the
+    # first such failure in a document, the document's later requests for that model go
+    # straight to this one. Not for a second reading, nor for a page of a scan or a photo
+    # with a quality warning, which stays with the first model: the backup was never
+    # measured on those, and on soft photos it misread item codes with no other sign. A
+    # request to it is bounded by the deadline like any other. None: off - the flow sends
+    # exactly the requests it sends without it, and so it does while the first provider
+    # answers.
+    fallback_model: str | None = None
+    fallback_max_tokens: int = OTHER_PAGE_MAX_TOKENS
+    # A request to the backup still unanswered after this many seconds is cut (it was seen
+    # to hang); the next attempt at the page is its retry. The longest measured page took
+    # 25 s.
+    fallback_timeout_s: float = 90.0

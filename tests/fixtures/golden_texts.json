@@ -1,0 +1,58 @@
+{
+  "scan_retries": [
+    {
+      "check": "line_math",
+      "message": "2 × 10.0 = 20.00, but the amount read is 99.0. One of the three values was misread: check the quantity, the unit price and the amount of this line."
+    },
+    {
+      "check": "rows_dropped",
+      "message": "1 row read from page 2 had neither an item code nor an amount and was left out. If it is a line item, it is missing: check the page."
+    },
+    {
+      "check": "doc_sums",
+      "message": "The line amounts add up to 209.0, but the invoice subtotal is 130.0 (a difference of 79.0). A line may be missing, read twice or have a wrong amount: check the line amounts against the invoice."
+    },
+    {
+      "check": "tax",
+      "message": "The tax worked out from the lines is 41.80, but the invoice's tax total is 26.0. Check the tax rates of the lines and the tax total."
+    }
+  ],
+  "scan_failures": [
+    {
+      "check": "page_read",
+      "message": "Page 1 could not be read in full: the model's answer was broken or every request failed. Line items from this page may be missing: check the page."
+    }
+  ],
+  "layout_confirmed": [],
+  "layout_swapped": [
+    {
+      "check": "layout_swapped",
+      "message": "On page 1, the line items taken from the text of the PDF and those read by the model disagree: quantity and unit price look swapped (26 of 26 lines). The model's reading of every page was used instead: check the quantities and unit prices."
+    }
+  ],
+  "layout_failed": [],
+  "text_layer_carry": [],
+  "photo_soft": [
+    {
+      "check": "photo_blurred",
+      "message": "The photo is not quite sharp (sharpness 260.7; 450 or more is safe). Amounts are usually read correctly, but item codes may be misread: check them."
+    }
+  ],
+  "photo_cut": [
+    {
+      "check": "photo_text_at_edge",
+      "message": "Text runs into the right edge of the photo: part of the invoice is cut off. Nothing was read; please take the photo again with the whole sheet in the frame."
+    }
+  ],
+  "scan_quality": [
+    {
+      "check": "scan_blurred",
+      "message": "Page 2 is too blurred to read (sharpness 3.9; at least 100 is needed), so it was not read. Scan it again at a higher resolution."
+    },
+    {
+      "check": "scan_blurred",
+      "message": "Page 4 is not quite sharp (sharpness 133.0; 200 or more is safe). Values read from it may contain errors: check them."
+    }
+  ],
+  "scan_ocr_overlay": []
+}

@@ -27,6 +27,11 @@ Left out of the comparison, on purpose:
 - an attached image is compared by its size (within 2 px): its JPEG bytes depend on the
   platform's image libraries. When a drawn input itself comes out with other bytes than
   when the golden file was written, attached PDFs made from it are compared by name only.
+
+The golden files hold the flow's messages, written for a developer. What a person reads
+(the API's wording of each issue) is pinned for the same scenarios in
+tests/fixtures/golden_texts.json, written from this repository: a change of a wording
+updates that file in the same commit.
 """
 
 import asyncio
@@ -38,11 +43,15 @@ from typing import Any
 import httpx
 import pytest
 
+from invoice_recognition.api.views import result_view
 from invoice_recognition.recognition import pipeline
 from invoice_recognition.recognition.config import Config
 from invoice_recognition.recognition.results import Result
 
 from golden_cases import CASES, GOLDEN, Case, Model, request_of, result_of, sha256
+
+# What a person reads, by scenario: [{"check": code, "message": the API's text}, ...].
+GOLDEN_TEXTS = GOLDEN.parent / "golden_texts.json"
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -170,6 +179,19 @@ def test_flow_output_is_the_one_pinned(case: Case, served: bool) -> None:
     sent = comparable_requests([request_of(b) for b in model.bodies], exact_files)
     differences += compare(sent, comparable_requests(golden["requests"], exact_files), "requests")
     assert differences == []
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c.name for c in CASES])
+def test_a_person_reads_the_texts_pinned(case: Case) -> None:
+    _, res, _ = run_case(case)
+    view = json.loads(result_view(res).model_dump_json())
+    texts = [{"check": i["code"], "message": i["message"]} for i in view["issues"]]
+    # The numbers inside the text of a photo_ / scan_ issue are measured: within 5 %.
+    assert compare(texts, json.loads(GOLDEN_TEXTS.read_text())[case.name]) == []
+
+
+def test_every_scenario_has_its_texts_pinned() -> None:
+    assert sorted(json.loads(GOLDEN_TEXTS.read_text())) == sorted(c.name for c in CASES)
 
 
 def test_every_golden_file_has_a_scenario() -> None:

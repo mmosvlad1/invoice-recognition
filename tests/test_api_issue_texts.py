@@ -22,7 +22,7 @@ from invoice_recognition.recognition import pipeline as pl
 from invoice_recognition.recognition import quality as ql
 from invoice_recognition.recognition import second_reading as sr
 from invoice_recognition.recognition.checks import Issue
-from invoice_recognition.recognition.config import Config
+from invoice_recognition.recognition.config import OTHER, Config
 from invoice_recognition.recognition.issue_values import (
     HeaderNotPrinted,
     IssueValues,
@@ -872,6 +872,20 @@ def test_a_scan_page_too_large_to_open() -> None:
         "Page 1 holds an image too large to open (900,000,000 pixels; at most 50,000,000 can "
         "be opened), so it was not read. Save the scan at a lower resolution and upload it "
         "again."
+    )
+
+
+def test_a_photo_read_by_the_backup_model() -> None:
+    rows = [line(1), line(2), line(3)]
+    down = httpx.Response(503, text="no provider")
+    backup = Server(header_for(rows), {1: [rows]})
+    server = Server(down, {1: [down]}, models={OTHER: backup})
+    photo = drawn.jpeg(drawn.photo())
+    res = run(photo, "image/jpeg", server, Config(fallback_model=OTHER))
+    assert text(one(res.issues, "fallback_model")) == (
+        f"A backup model ({OTHER}) read this photo because the usual one was not available. On "
+        "photos that are not perfectly sharp it has misread item codes without any other sign, "
+        "so please check the item codes against the photo."
     )
 
 

@@ -19,17 +19,19 @@ from typing import Any
 
 import httpx
 import pytest
+from PIL import ImageFilter
 from test_golden import comparable, comparable_requests, compare
 
 from invoice_recognition.api.views import job_error, result_view
 from invoice_recognition.llm import PDF_NATIVE
 from invoice_recognition.recognition import pipeline as pl
 from invoice_recognition.recognition.config import FAST, OTHER, Config
+from invoice_recognition.recognition.issue_values import BackupModel
 from invoice_recognition.recognition.prompts import EXTRACT_PAGE
 from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import JSONObject
 
-from drawn import scan, scanned
+from drawn import jpeg, photo, scan, scanned
 from fakes import Answer, Handler, SlowServer, header_for, kind_of, line, model_of, sse
 from golden_cases import CASES, GOLDEN, Case, Model, request_of, result_of, sha256
 from samples import saved_layout, truth_doc
@@ -320,8 +322,35 @@ def layout_kept(res: Result) -> None:
     )
 
 
+PHOTO_ROWS = [line(1), line(2), line(3)]
+PHOTO_ANSWERS: dict[Key, list[Answer]] = {"header": [header_for(PHOTO_ROWS)], 1: [PHOTO_ROWS]}
+
+
+def sharp_photo() -> tuple[bytes, str]:
+    return jpeg(photo()), "image/jpeg"
+
+
+def soft_photo() -> tuple[bytes, str]:
+    return jpeg(photo().filter(ImageFilter.GaussianBlur(0.8))), "image/jpeg"
+
+
+def photo_page_kept(res: Result) -> None:
+    """The line items of a photo read by the backup: a warning on the item codes instead
+    of the note."""
+    assert res.quality.get("verdict", "off") in ("ok", "off")
+    pr = res.pages[0]
+    assert (pr.model, pr.by_backup) == (OTHER, True)
+    assert [i.check for i in res.issues] == ["fallback_model"]
+    [issue] = res.issues
+    assert (issue.page, issue.severity, issue.fields) == (1, "warning", ["line.sku"])
+    assert issue.values == BackupModel(OTHER) and issue.form is None
+    assert res.status == "needs_review" and fallback_notes(res) == []
+
+
 KINDS = [
     *PAGE_KINDS,
+    Kind("a photo", sharp_photo, PHOTO_ANSWERS, 1, kept=photo_page_kept),
+    Kind("the header of a photo", sharp_photo, PHOTO_ANSWERS, "header", kept=header_kept),
     replace(scan_kind(2, 1), name="the header of a scan", target="header", kept=header_kept),
     Kind(
         "the header of a PDF with a text layer", *digital("s_classic"), "header", kept=header_kept
@@ -1175,3 +1204,51 @@ def test_switched_off_a_scenario_that_fails_never_asks_the_backup() -> None:
     model = Script(every)
     res = run(*CASES[4].data(), route(model, asked), Config())
     assert asked.bodies == [] and res.status == "failed"
+
+
+# --------------------------------------------------------------------------- #
+# Photos: read by the backup only without a quality warning, and then flagged
+# --------------------------------------------------------------------------- #
+
+
+def every_request_down(answers: Mapping[Key, list[Answer]]) -> Script:
+    return Script({k: [DOWN] for k in answers})
+
+
+def test_a_photo_the_backup_read_whole_has_the_warning_and_no_note() -> None:
+    first, backup = every_request_down(PHOTO_ANSWERS), Script(PHOTO_ANSWERS)
+    res = run(*sharp_photo(), wire(first, backup), on())
+    assert sorted(map(str, backup.calls)) == ["1", "header"]
+    assert all("plugins" not in b for b in backup.bodies)
+    assert [a.model for a in res.header_attempts] == [FAST, OTHER]
+    photo_page_kept(res)
+
+
+def test_a_photo_that_was_not_measured_may_go_to_the_backup() -> None:
+    """With the check off nothing says the photo is sharp, nor that it is not: read, and
+    flagged as any photo the backup reads."""
+    first, backup = every_request_down(PHOTO_ANSWERS), Script(PHOTO_ANSWERS)
+    res = run(*soft_photo(), wire(first, backup), on(photo_quality=False))
+    assert res.quality == {}
+    photo_page_kept(res)
+
+
+def test_a_photo_both_providers_failed_has_no_warning_that_the_backup_read_it() -> None:
+    first, backup = every_request_down(PHOTO_ANSWERS), every_request_down(PHOTO_ANSWERS)
+    res = run(*sharp_photo(), wire(first, backup), on())
+    assert backup.calls == Counter({"header": 2, 1: 2})
+    assert "fallback_model" not in [i.check for i in res.issues] and fallback_notes(res) == []
+    assert res.status == "failed"
+    error = job_error("image", res)
+    assert error is not None and error.code == "model_unavailable"
+
+
+def test_a_photo_with_a_quality_warning_never_goes_to_the_backup() -> None:
+    first, backup = every_request_down(PHOTO_ANSWERS), Script(PHOTO_ANSWERS)
+    res = run(*soft_photo(), wire(first, backup), on())
+    assert res.quality["verdict"] == "warn"
+    assert backup.bodies == []
+    assert first.calls == Counter({"header": 2, 1: 2})  # both attempts, by its own model
+    assert res.status == "failed"
+    error = job_error("image", res)
+    assert error is not None and error.code == "model_unavailable"

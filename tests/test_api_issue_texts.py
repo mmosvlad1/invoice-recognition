@@ -5,6 +5,7 @@ change of the flow's wording shows here instead of silently falling back to it."
 import ast
 import inspect
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -114,7 +115,40 @@ def text(issue: Issue, line: Line | None = None) -> str:
     worded = messages.issue_text(issue, line)
     assert worded != issue.message, f"the flow's form is not recognised: {issue.message!r}"
     assert not [w for w in JARGON if w in worded.lower()], worded
+    _HIT.add(_rule(issue))
     return worded
+
+
+def leaked(issue: Issue) -> str:
+    """The text of an issue whose message no wording recognises: the person reads the
+    flow's own words. Each use is a known gap, named where it is used."""
+    worded = messages.issue_text(issue)
+    assert worded == issue.message
+    return worded
+
+
+# Transitional, while the texts are taken from the flow's message by the patterns of
+# messages.ISSUE_TEXTS: which pattern worded each text checked by text(), so that the last
+# test can show every pattern of the table is pinned by a test of this module. A test-only
+# shortcut: the compiled patterns are read from the closure of messages._rules.
+_HIT: set[tuple[str, int | None]] = set()
+
+
+def _patterns(code: str) -> list[re.Pattern[str]] | None:
+    """The patterns of the code's wording, in order; None for a wording without any."""
+    for cell in getattr(messages.ISSUE_TEXTS[code], "__closure__", None) or ():
+        compiled = cell.cell_contents
+        if isinstance(compiled, list):
+            return [pattern for pattern, _ in compiled]
+    return None
+
+
+def _rule(issue: Issue) -> tuple[str, int | None]:
+    """(code, index of the pattern that matched) or (code, None) for a wording without one."""
+    patterns = _patterns(issue.check)
+    if patterns is None:
+        return issue.check, None
+    return issue.check, next(k for k, p in enumerate(patterns) if p.fullmatch(issue.message))
 
 
 def doc(lines: list[Line], **header: object) -> Doc:
@@ -207,6 +241,13 @@ def test_tax() -> None:
     )
 
 
+def test_a_tax_row_whose_rate_is_not_a_number() -> None:
+    breakdown = [{"rate": 20, "base": 20.0, "tax": 4.0}, {"rate": "n/a", "base": 12.5}]
+    [issue] = checks.check_tax(doc([line(1)], tax_breakdown=breakdown))
+    # A known gap: no wording for it, so the person reads the flow's own words.
+    assert leaked(issue) == "lines at None% add up to 0, invoice says 12.5"
+
+
 def test_numbering() -> None:
     twice = checks.check_numbering(doc([line(1), line(2), line(2), line(3), line(3)]))
     assert text(one(twice, "numbering")) == (
@@ -235,6 +276,15 @@ def test_numbering() -> None:
     )
 
 
+def test_more_than_ten_repeated_numbers() -> None:
+    [issue] = checks.check_numbering(doc([line(n) for n in range(1, 13) for _ in (1, 2)]))
+    # The flow lists the first ten of the twelve, and the text reads them as all.
+    assert text(issue) == (
+        "Position numbers 1, 2, 3, 4, 5, 6, 7, 8, 9 and 10 appear more than once. Lines may "
+        "have been read twice: check the lines with these numbers."
+    )
+
+
 def test_control_totals() -> None:
     d = doc([line(1), line(2)]) | {
         "checkpoints": [{"label": 'Carried "forward"', "amount": 50.0, "after_line": 2}]
@@ -244,6 +294,15 @@ def test_control_totals() -> None:
         'Line items 1–2 add up to 40.0, but the printed "Carried "forward"" is 50.0. A line '
         "in this range may be missing, read twice or misread: check them."
     )
+
+
+def test_a_control_total_whose_label_has_a_line_break() -> None:
+    d = doc([line(1), line(2)]) | {
+        "checkpoints": [{"label": "Carried\nforward", "amount": 50.0, "after_line": 2}]
+    }
+    [issue] = checks.check_checkpoints(d)
+    # A known gap: the pattern does not take a line break.
+    assert leaked(issue) == 'lines 1-2 add up to 40.0, but "Carried\nforward" says 50.0'
 
 
 PAGE = "ACME Ltd Invoice INV-7\nAB-1001 Item 2 10.00 20.00\nAB-1002 Item 3 5.00 15.00\nTotal 35.00"
@@ -319,6 +378,18 @@ def test_header_values_not_printed() -> None:
     ]
 
 
+def test_an_identifier_with_a_tab_or_a_line_break() -> None:
+    evidence = ev.build([PAGE], "text_layer")
+    [tab] = checks.check_header_grounding(doc([], po_number="PO\t1"), evidence)
+    assert text(tab) == (
+        "The purchase order number read as PO\t1 is not printed anywhere in the document. It "
+        "may have been misread: check it on the invoice."
+    )
+    [broken] = checks.check_header_grounding(doc([], po_number="PO\n1"), evidence)
+    # A known gap: the pattern does not take a line break.
+    assert leaked(broken) == 'po_number "PO\n1" is not printed anywhere in the document'
+
+
 def test_line_items_missing_from_a_page() -> None:
     evidence = ev.build([PAGE, PAGE], "text_layer")
     found = checks.check_coverage(doc([line(1) | {"page": 1}]), evidence)
@@ -345,6 +416,17 @@ def test_line_items_missing_from_a_page() -> None:
             "twice: check the page."
         )
     ]
+
+
+def test_a_page_of_a_pdf_whose_reading_has_no_lines() -> None:
+    # The model returned no rows for page 2 of a PDF with a text layer: the page's own
+    # checks count its printed rows against none, and the issue is the page's.
+    [issue] = pl.check_page([], [], 2, ev.build([PAGE, PAGE], "text_layer"))
+    assert issue.page == 2
+    assert text(issue) == (
+        "The document seems to have 2 line items, but 0 were read. A line may be missing or "
+        "read twice: check the line items."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -411,6 +493,24 @@ def test_a_page_whose_answer_was_cut_off_does_not_claim_its_lines_are_missing() 
     assert "are missing" not in worded and "by hand" not in worded
 
 
+def test_a_page_whose_reading_broke(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pl, "read_page", broken)
+    res = scan_result({1: [[line(1)]]})
+    assert text(one(res.issues, "page_read")) == f"Page 1 {PAGE_NOT_READ_IN_FULL}"
+
+
+def test_a_page_found_by_code_whose_checks_broke(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pl, "check_page", broken)
+    pages, _ = pl.layout_pages(lay.Parsed([], [], []), 1, ev.build([PAGE], "text_layer"))
+    assert text(one(pages[1].issues, "page_read")) == f"Page 1 {PAGE_NOT_READ_IN_FULL}"
+
+
 def test_pages_cut_by_the_deadline() -> None:
     unread = Issue("page_read", pl.deadline_unread_text(3, 0), page=3)
     assert text(unread) == (
@@ -453,11 +553,36 @@ def test_pages_cut_by_the_deadline() -> None:
                 "page was read; only a second reading of a page or of the header was cut short."
             ),
         ),
+        (
+            [],
+            False,
+            (
+                "Reading was stopped after 240 seconds, the time allowed for one document. The "
+                "header (supplier, invoice number, totals) was not read."
+            ),
+        ),
+        (
+            [2, 5],
+            False,
+            (
+                "Reading was stopped after 240 seconds, the time allowed for one document. Pages "
+                "2 and 5 were not read. The header (supplier, invoice number, totals) was not "
+                "read."
+            ),
+        ),
     ],
 )
 def test_the_deadline(unread: list[int], header_read: bool, worded: str) -> None:
     issue = Issue("deadline_exceeded", pl.deadline_text(240.0, unread, header_read))
     assert text(issue) == worded
+
+
+def test_a_deadline_of_a_million_seconds() -> None:
+    issue = Issue("deadline_exceeded", pl.deadline_text(1e6, [2], True))
+    # A known gap: the pattern does not take the exponent of "1e+06".
+    assert leaked(issue) == (
+        "Reading stopped at the time limit of 1e+06 s for one document. Page 2 was not read."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -592,8 +717,12 @@ def test_a_page_read_twice_by_two_models() -> None:
     [codes] = sr.compare_page(
         [item(n) for n in (1, 2, 3)], [item(n, sku=f"hb {n:05d}") for n in (1, 2, 3)], 1
     )
-    assert "reads the item code differently on 3 of 3" in text(codes)
-    assert "check the item code column" in text(codes)
+    assert text(codes) == (
+        "On page 1, a second model reads the item code differently on 3 of 3 line items (for "
+        "example at position 1: item code hb 00001 instead of HB-00001). The two readings "
+        "write this column differently, or one of them misread it: check the item code column "
+        "on this page."
+    )
     [unmatched] = sr.compare_page([item(1), item(2), item(7)], [item(1), item(2), item(4)], 3)
     assert text(unmatched) == (
         "On page 3, a second model finds as many line items as the result (3), but not at the "
@@ -604,6 +733,24 @@ def test_a_page_read_twice_by_two_models() -> None:
     assert text(counts) == (
         "On page 5, a second model finds 1 line item where the result has 3. The lines could "
         "not be matched one to one, so they were not compared. Check this page on the invoice."
+    )
+
+
+def test_item_codes_that_hold_the_word_sku() -> None:
+    def item(no: int, sku: str) -> Line:
+        return line(no) | {"sku": sku}
+
+    [inside] = sr.compare_page([item(1, "HB-00001")], [item(1, "Piano SKU 5")], 2)
+    # A known gap: the value itself is rewritten where it holds "SKU" after a space.
+    assert text(inside) == (
+        "Position 1 on page 2 was read differently by a second model: item code Piano item "
+        "code 5 instead of HB-00001. One of the two readings is wrong: check this line on the "
+        "invoice."
+    )
+    [listed] = sr.compare_page([item(1, "PACK, SKU 7")], [item(1, "X")], 2)
+    assert text(listed) == (
+        "Position 1 on page 2 was read differently by a second model: item code X instead of "
+        "PACK, item code 7. One of the two readings is wrong: check this line on the invoice."
     )
 
 
@@ -672,6 +819,20 @@ LIMITS = ql.Limits()
             ),
         ),
         (
+            ql.Reason("text_at_edge", "", "reject", 0.4),
+            (
+                "Text runs into an edge of the photo: part of the invoice is cut off. Nothing was "
+                "read; please take the photo again with the whole sheet in the frame."
+            ),
+        ),
+        (
+            ql.Reason("sheet_cut", "", "warn", 0.2),
+            (
+                "The sheet runs out of the photo past an edge. No text is near that edge, but "
+                "check that nothing of the invoice is missing."
+            ),
+        ),
+        (
             ql.Reason("sheet_edge_unseen", "", "warn"),
             (
                 "No edge of the sheet is visible in the photo, so nothing confirms that the whole "
@@ -701,14 +862,19 @@ LIMITS = ql.Limits()
             ),
         ),
     ],
+    # "hand-built": a reason quality.reasons() does not produce (text_at_edge is always a
+    # reject, no_text always has a count, and both side reasons always have a side), kept
+    # for the wording's other branches.
     ids=[
         "blurred-reject",
         "blurred-warn",
         "no_text",
-        "no_text-unmeasured",
+        "no_text-unmeasured-hand-built",
         "text_at_edge-reject",
-        "text_at_edge-warn",
+        "text_at_edge-warn-hand-built",
         "sheet_cut",
+        "text_at_edge-no-side-hand-built",
+        "sheet_cut-no-side-hand-built",
         "sheet_edge_unseen",
         "dark",
         "glare",
@@ -787,6 +953,9 @@ def test_the_view_words_an_issue_with_its_line() -> None:
     )
 
 
+# Hand-built issues: the flow never builds these; they pin the fault boundary.
+
+
 def test_a_form_the_wording_does_not_know_keeps_the_flows_message() -> None:
     issue = Issue("tax", "some new way the flow says it")
     assert messages.issue_text(issue) == "some new way the flow says it"
@@ -801,5 +970,33 @@ def test_a_wording_that_breaks_keeps_the_flows_message(caplog: pytest.LogCapture
 
 
 def test_a_row_without_a_page_still_reads_as_a_sentence() -> None:
+    # Hand-built: layout_pages always gives a row its page.
     issue = Issue("layout_row", "stray_words: x y")
     assert text(issue).startswith("The row of a line item also holds words")
+
+
+# --------------------------------------------------------------------------- #
+# Transitional: every pattern of the old table is pinned
+# --------------------------------------------------------------------------- #
+
+
+def _whole_module_selected(config: pytest.Config) -> bool:
+    """Every test of this module runs in the session: no selection by keyword, marker,
+    node id or earlier failures."""
+    options = ("keyword", "markexpr", "deselect", "lf", "stepwise")
+    if any(getattr(config.option, name, None) for name in options):
+        return False
+    return not any("::" in arg for arg in config.args)
+
+
+def test_every_pattern_of_the_wording_table_is_pinned(request: pytest.FixtureRequest) -> None:
+    # Last in the module: the tests above have recorded what they hit.
+    if not _whole_module_selected(request.config):
+        pytest.skip("only a part of the module was selected")
+    table: set[tuple[str, int | None]] = set()
+    for code in messages.ISSUE_TEXTS:
+        patterns = _patterns(code)
+        table |= {(code, None)} if patterns is None else {(code, k) for k in range(len(patterns))}
+    # 44 patterns and 6 wordings that need none.
+    assert (len(table), sum(1 for _, k in table if k is None)) == (50, 6)
+    assert table - _HIT == set()

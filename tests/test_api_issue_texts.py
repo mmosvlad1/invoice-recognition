@@ -5,7 +5,6 @@ change of the flow's wording shows here instead of silently falling back to it."
 import ast
 import inspect
 import json
-import re
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -115,9 +114,24 @@ def worded_codes() -> set[str]:
 def test_every_code_the_flow_raises_has_a_text_and_no_other_code_does() -> None:
     codes = emitted_codes()
     assert len(codes) >= 30  # the derivation found the flow's codes, not an empty set
-    # Transitional: a code not yet given values is worded by the old table, never by both.
-    assert worded_codes().isdisjoint(messages.ISSUE_TEXTS)
-    assert worded_codes() | set(messages.ISSUE_TEXTS) == codes
+    assert worded_codes() == codes
+
+
+def test_no_text_is_read_from_the_flows_message() -> None:
+    source = Path(messages.__file__).read_text()
+    tree = ast.parse(source)
+    imported = {
+        a.name for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names
+    }
+    imported |= {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert not imported & {"re", "regex"}
+    # One read of an issue's message: the fault boundary, which keeps it as it is.
+    reads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "message"
+    ]
+    assert [ast.unparse(node) for node in reads] == ["issue.message"]
 
 
 # --------------------------------------------------------------------------- #
@@ -143,10 +157,6 @@ def text(issue: Issue, line: Line | None = None) -> str:
     # Values or a form, never both; values only of a shape made for the issue's code.
     assert issue.form is None or issue.values is None
     assert issue.values is None or issue.check in type(issue.values).codes
-    # Transitional: a code that has left the old table is worded from data only.
-    assert issue.check in messages.ISSUE_TEXTS or messages._new(issue)
-    if not messages._new(issue):
-        _HIT.add(_rule(issue))
     return worded
 
 
@@ -156,30 +166,6 @@ def leaked(issue: Issue) -> str:
     worded = messages.issue_text(issue)
     assert worded == issue.message
     return worded
-
-
-# Transitional, while the texts are taken from the flow's message by the patterns of
-# messages.ISSUE_TEXTS: which pattern worded each text checked by text(), so that the last
-# test can show every pattern of the table is pinned by a test of this module. A test-only
-# shortcut: the compiled patterns are read from the closure of messages._rules.
-_HIT: set[tuple[str, int | None]] = set()
-
-
-def _patterns(code: str) -> list[re.Pattern[str]] | None:
-    """The patterns of the code's wording, in order; None for a wording without any."""
-    for cell in getattr(messages.ISSUE_TEXTS[code], "__closure__", None) or ():
-        compiled = cell.cell_contents
-        if isinstance(compiled, list):
-            return [pattern for pattern, _ in compiled]
-    return None
-
-
-def _rule(issue: Issue) -> tuple[str, int | None]:
-    """(code, index of the pattern that matched) or (code, None) for a wording without one."""
-    patterns = _patterns(issue.check)
-    if patterns is None:
-        return issue.check, None
-    return issue.check, next(k for k, p in enumerate(patterns) if p.fullmatch(issue.message))
 
 
 def doc(lines: list[Line], **header: object) -> Doc:
@@ -855,17 +841,33 @@ def test_item_codes_that_hold_the_word_sku() -> None:
     def item(no: int, sku: str) -> Line:
         return line(no) | {"sku": sku}
 
+    # The values are quoted as read, "SKU" in them too (text() would take it for jargon).
     [inside] = sr.compare_page([item(1, "HB-00001")], [item(1, "Piano SKU 5")], 2)
-    # A known gap: the value itself is rewritten where it holds "SKU" after a space.
-    assert text(inside) == (
-        "Position 1 on page 2 was read differently by a second model: item code Piano item "
-        "code 5 instead of HB-00001. One of the two readings is wrong: check this line on the "
-        "invoice."
+    assert messages.issue_text(inside) == (
+        "Position 1 on page 2 was read differently by a second model: item code Piano SKU 5 "
+        "instead of HB-00001. One of the two readings is wrong: check this line on the invoice."
     )
     [listed] = sr.compare_page([item(1, "PACK, SKU 7")], [item(1, "X")], 2)
-    assert text(listed) == (
+    assert messages.issue_text(listed) == (
         "Position 1 on page 2 was read differently by a second model: item code X instead of "
-        "PACK, item code 7. One of the two readings is wrong: check this line on the invoice."
+        "PACK, SKU 7. One of the two readings is wrong: check this line on the invoice."
+    )
+
+
+@pytest.mark.parametrize(
+    ("sku", "quoted"),
+    [
+        ("HB\n00009", "HB 00009"),  # whitespace inside is collapsed, as the flow compares it
+        ("HB\ud80009", "HB\ud80009"),
+        ("H" * 200_000, "H" * 39 + "…"),  # the flow quotes 40 characters of a code
+    ],
+    ids=["line-break", "surrogate", "long"],
+)
+def test_an_item_code_is_quoted_as_the_flow_quotes_it(sku: str, quoted: str) -> None:
+    [issue] = sr.compare_page([line(1) | {"sku": "HB-1"}], [line(1) | {"sku": sku}], 2)
+    assert text(issue) == (
+        f"Position 1 on page 2 was read differently by a second model: item code {quoted} "
+        "instead of HB-1. One of the two readings is wrong: check this line on the invoice."
     )
 
 
@@ -1091,10 +1093,14 @@ def test_the_view_words_an_issue_with_its_line() -> None:
 # Hand-built issues: the flow never builds these; they pin the fault boundary.
 
 
-def test_a_form_the_wording_does_not_know_keeps_the_flows_message() -> None:
+def test_an_issue_without_a_sentence_keeps_the_flows_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Neither values nor a form for a check whose sentences need one, and an unknown code.
     issue = Issue("tax", "some new way the flow says it")
     assert messages.issue_text(issue) == "some new way the flow says it"
     assert messages.issue_text(Issue("a_new_code", "as written")) == "as written"
+    assert caplog.text.count("could not be worded") == 2
 
 
 def test_a_wording_that_breaks_keeps_the_flows_message(caplog: pytest.LogCaptureFixture) -> None:
@@ -1125,59 +1131,7 @@ def test_values_that_do_not_fit_the_issue_keep_the_flows_message(
     assert "could not be worded" in caplog.text
 
 
-def test_an_issue_with_values_is_never_read_from_its_message(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    # Transitional: while the old table exists, an issue whose wording fails keeps the
-    # flow's text; the patterns are never tried on it.
-    parsed: list[Issue] = []
-
-    def spy(issue: Issue, line: Line | None) -> str:
-        parsed.append(issue)
-        return "from the message"
-
-    def broken(values: SubtotalOff) -> str:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(messages, "_parsed", spy)
-    monkeypatch.setattr(messages, "_subtotal_off", broken)
-    [issue] = checks.check_doc_sums(
-        doc([line(1)], supplier_name="ACME", subtotal=30.0, tax_total=6.0, total=36.0)
-    )
-    assert isinstance(issue.values, SubtotalOff)
-    assert messages.issue_text(issue) == issue.message
-    assert "could not be worded" in caplog.text
-    assert parsed == []
-
-
 def test_a_row_without_a_page_still_reads_as_a_sentence() -> None:
     # Hand-built: layout_pages always gives a row its page.
     issue = Issue("layout_row", "stray_words: x y", values=LayoutRow("stray_words", "x y"))
     assert text(issue).startswith("The row of a line item also holds words")
-
-
-# --------------------------------------------------------------------------- #
-# Transitional: every pattern of the old table is pinned
-# --------------------------------------------------------------------------- #
-
-
-def _whole_module_selected(config: pytest.Config) -> bool:
-    """Every test of this module runs in the session: no selection by keyword, marker,
-    node id or earlier failures."""
-    options = ("keyword", "markexpr", "deselect", "lf", "stepwise")
-    if any(getattr(config.option, name, None) for name in options):
-        return False
-    return not any("::" in arg for arg in config.args)
-
-
-def test_every_pattern_of_the_wording_table_is_pinned(request: pytest.FixtureRequest) -> None:
-    # Last in the module: the tests above have recorded what they hit.
-    if not _whole_module_selected(request.config):
-        pytest.skip("only a part of the module was selected")
-    table: set[tuple[str, int | None]] = set()
-    for code in messages.ISSUE_TEXTS:
-        patterns = _patterns(code)
-        table |= {(code, None)} if patterns is None else {(code, k) for k in range(len(patterns))}
-    # The patterns of the codes not yet given values, and the wordings that need none.
-    assert (len(table), sum(1 for _, k in table if k is None)) == (4, 0)
-    assert table - _HIT == set()

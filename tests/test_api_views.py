@@ -10,10 +10,10 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from invoice_recognition.api import messages
 from invoice_recognition.api.views import MAX_DEPTH, LineView, ResultView, result_view
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import FAST, OTHER, Config
+from invoice_recognition.recognition.issue_values import TaxTotalOff
 from invoice_recognition.recognition.pipeline import stronger_model_note
 from invoice_recognition.recognition.results import Attempt, PageResult, Result
 from invoice_recognition.shapes import Header, JSONObject, Line
@@ -166,15 +166,17 @@ def test_fields_suggestions_and_the_issues_followed_from_pass_through() -> None:
     assert (out[1]["code"], out[1]["severity"]) == ("second_reading", "warning")
 
 
-def test_an_issue_message_comes_from_the_wording_table_when_one_is_given(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(
-        messages.ISSUE_TEXTS, "tax", lambda i, line: f"Tax on page {i.page} is off."
-    )
-    issues = [Issue("tax", "raw", page=2), Issue("doc_sums", "kept as the flow wrote it")]
+def test_an_issue_message_is_worded_from_its_values_when_it_has_them() -> None:
+    tax = Issue("tax", "raw", page=2, values=TaxTotalOff(Decimal("4.00"), Decimal("9.0")))
+    issues = [tax, Issue("doc_sums", "kept as the flow wrote it")]
     out = dumped(result_view(result(TWO_PAGES, issues=issues)))["issues"]
-    assert [i["message"] for i in out] == ["Tax on page 2 is off.", "kept as the flow wrote it"]
+    assert [i["message"] for i in out] == [
+        (
+            "The tax worked out from the lines is 4.00, but the invoice's tax total is 9.0. "
+            "Check the tax rates of the lines and the tax total."
+        ),
+        "kept as the flow wrote it",
+    ]
 
 
 def test_notes_pass_through_with_line_renamed_and_page_always_present() -> None:

@@ -256,6 +256,59 @@ class TooLarge:
     limit: int
 
 
+# --------------------------------------------------------------------------- #
+# A page of a scan read a second time, by another model (second_reading.py)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Difference:
+    """One field the two readings of a line disagree on: the key of the line ("sku",
+    "quantity", ...) and each reading's value as the flow quotes it, None for none."""
+
+    field: str
+    theirs: str | None
+    ours: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SecondRow:
+    """A line item the second reading reads otherwise: its place on the page, counted
+    from 1 (the issue's line_no when the page numbers its lines), and what differs."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"second_reading"})
+    item: int
+    differences: tuple[Difference, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SecondColumn:
+    """A field the second reading reads otherwise on most line items of a page: on how
+    many of those compared, and the first of them (its place on the page, counted from 1,
+    and its position number if printed) as an example."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"second_reading"})
+    differ: int
+    compared: int
+    item: int
+    line_no: int | None
+    difference: Difference
+
+
+@dataclass(frozen=True, slots=True)
+class SecondPage:
+    """The line items of a page that have no counterpart in the other reading: how many
+    each reading found, whether the lines could be matched at all, and the position
+    numbers only the second reading has (extra) or only the result has (absent)."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"second_reading"})
+    found: int
+    result: int
+    matched: bool
+    extra: tuple[int, ...]
+    absent: tuple[int, ...]
+
+
 type IssueValues = (
     SubtotalOff
     | TotalOff
@@ -279,6 +332,9 @@ type IssueValues = (
     | FrameSide
     | Glare
     | TooLarge
+    | SecondRow
+    | SecondColumn
+    | SecondPage
 )
 
 # Which of a check's sentences that name no value an issue is; only for a check that has

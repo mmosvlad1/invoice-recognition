@@ -6,7 +6,6 @@ Machine-readable codes stay where they are used; only the words live here.
 
 import json
 import logging
-import re
 from collections.abc import Callable
 from typing import assert_never
 
@@ -16,6 +15,7 @@ from invoice_recognition.recognition.issue_values import (
     ControlTotalOff,
     CutByDeadline,
     DeadlineStop,
+    Difference,
     DocumentCoverage,
     FrameSide,
     Glare,
@@ -29,6 +29,9 @@ from invoice_recognition.recognition.issue_values import (
     RepeatedNumbers,
     RowsCompared,
     RowsDropped,
+    SecondColumn,
+    SecondPage,
+    SecondRow,
     SubtotalOff,
     TaxNoRow,
     TaxRateOff,
@@ -203,16 +206,10 @@ def scan_unreadable(
 # (Issue.values, a shape of recognition/issue_values.py). A sentence that names no value
 # is chosen by the issue's code and form. An issue that has no wording, or whose wording
 # fails, keeps the flow's text and logs a warning: a wording can never lose an issue or
-# break a result.
-#
-# Transitional: the codes not yet given values are still worded from the flow's message,
-# by the patterns of ISSUE_TEXTS below.
+# break a result. Nothing is read back from the flow's message.
 
 type Wording = Callable[[Issue, Line | None], str]
 """(the issue, the line it is about or None) -> the text."""
-
-type Parsed = Callable[[Issue, Line | None], str | None]
-"""Transitional: a wording read from the flow's message; None: keep the flow's text."""
 
 
 # Numbers as a person reads them, as the flow's message prints the same number. An exact
@@ -263,28 +260,12 @@ def _shown(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
-def _rules(*rules: tuple[str, Callable[[re.Match[str], Issue, Line | None], str]]) -> Parsed:
-    """A wording from (pattern of the flow's message, text for it) pairs; the first
-    pattern that matches the whole message wins."""
-    compiled = [(re.compile(pattern), text) for pattern, text in rules]
-
-    def word(issue: Issue, line: Line | None) -> str | None:
-        for pattern, text in compiled:
-            if (m := pattern.fullmatch(issue.message)) is not None:
-                return text(m, issue, line)
-        return None
-
-    return word
-
-
-_NUMBER = r"(-?[\d.]+(?:E[+-]?\d+)?)"
-
-
 # What the columns of a line are called on an invoice.
 _COLUMNS = {
     "sku": "item code",
     "quantity": "quantity",
     "unit_price": "unit price",
+    "tax_rate": "tax rate",
     "amount": "amount",
 }
 
@@ -681,88 +662,75 @@ def _too_large(issue: Issue, v: TooLarge) -> str:
     )
 
 
-def _item_codes(text: str) -> str:
-    """The flow's words for a second reading name the item code "SKU" where it labels a
-    value ("SKU A instead of B", "no SKU where ..."); a person reads "item code"."""
-    return re.sub(r"(^|, | and |no )SKU(?= )", r"\1item code", text)
+# A page of a scan read a second time, by another model (second_reading.py).
 
 
-def _read_twice_row(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    place, page, found = m.groups()
+def _difference(d: Difference) -> str:
+    """One field the two readings differ on, each value as the flow quotes it."""
+    label = _COLUMNS.get(d.field, d.field)
+    if d.theirs is None:
+        return f"no {label} where the result has {d.ours}"
+    if d.ours is None:
+        return f"{label} {d.theirs} where the result has none"
+    return f"{label} {d.theirs} instead of {d.ours}"
+
+
+def _second_row(issue: Issue, v: SecondRow) -> str:
+    place = f"Position {issue.line_no}" if issue.line_no is not None else f"Line item {v.item}"
+    found = _and([_difference(d) for d in v.differences])
     return (
-        f"{place} on page {page} was read differently by a second model: "
-        f"{_item_codes(found)}. One of the two readings is wrong: check this line on the "
-        "invoice."
+        f"{place} on {_page(issue)} was read differently by a second model: {found}. One of "
+        "the two readings is wrong: check this line on the invoice."
     )
 
 
-def _read_twice_column(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    page, label, differ, compared, where, example = m.groups()
-    label = "item code" if label == "SKU" else label
+def _second_column(issue: Issue, v: SecondColumn) -> str:
+    label = _COLUMNS.get(v.difference.field, v.difference.field)
+    where = f"position {v.line_no}" if v.line_no is not None else f"line item {v.item}"
     return (
-        f"On page {page}, a second model reads the {label} differently on {differ} of "
-        f"{compared} line items (for example at {where}: {_item_codes(example)}). The two "
-        f"readings write this column differently, or one of them misread it: check the {label} "
-        "column on this page."
+        f"On {_page(issue)}, a second model reads the {label} differently on {v.differ} of "
+        f"{v.compared} line items (for example at {where}: {_difference(v.difference)}). The "
+        "two readings write this column differently, or one of them misread it: check the "
+        f"{label} column on this page."
     )
 
 
-def _read_twice_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    page, found, result, rest = m.groups()
-    return (
-        f"On page {page}, a second model finds {found} where the result has {result}. "
-        f"{rest}Check this page on the invoice."
-    )
-
-
-# Transitional: the codes not yet given values, worded from the flow's message. A code
-# leaves this table in the commit that gives its issues values.
-ISSUE_TEXTS: dict[str, Parsed] = {
-    # A page of a scan read a second time, by another model (second_reading.py).
-    "second_reading": _rules(
-        (
-            (
-                r"(Position \d+|Line item \d+) on page (\d+): a second reading by another model "
-                r"gives (.*)\. One of the two readings is wrong; please check this line\."
-            ),
-            _read_twice_row,
-        ),
-        (
-            (
-                r"On page (\d+) a second reading by another model gives a different (.+?) on "
-                r"(\d+) of (\d+) line items, for example at (.+?): (.*)\. The two readings "
-                r"write this column differently, or one of them misread it; please check the "
-                r".+ column on this page\."
-            ),
-            _read_twice_column,
-        ),
-        (
-            (
-                r"Page (\d+): a second reading by another model finds (\d+ line items?); the "
-                r"result has (\d+)\. (.*)Please check this page\."
-            ),
-            _read_twice_page,
-        ),
-        (
-            (
-                r"Page (\d+): a second reading by another model finds as many line items as "
-                r"the result \((\d+)\), but not at the same positions\. (.*)Please check this "
-                r"page\."
-            ),
-            lambda m, i, line: (
-                f"On page {m[1]}, a second model finds as many line items as the result "
-                f"({m[2]}), but not at the same positions. {m[3]}Check this page on the "
-                "invoice."
-            ),
-        ),
-    ),
-}
+def _second_page(issue: Issue, v: SecondPage) -> str:
+    if v.found == v.result:
+        counts = (
+            f"On {_page(issue)}, a second model finds as many line items as the result "
+            f"({v.result}), but not at the same positions."
+        )
+    else:
+        items = _plural(v.found, "line item", "line items")
+        counts = (
+            f"On {_page(issue)}, a second model finds {v.found} {items} where the result has "
+            f"{v.result}."
+        )
+    text = [counts]
+    if not v.matched:
+        text.append("The lines could not be matched one to one, so they were not compared.")
+    if v.extra:
+        are = _plural(len(v.extra), "is", "are")
+        text.append(
+            f"{_plural(len(v.extra), 'Position', 'Positions')} {ranges(v.extra)} "
+            f"{are} not in the result."
+        )
+    if v.absent:
+        were = _plural(len(v.absent), "was", "were")
+        text.append(
+            f"{_plural(len(v.absent), 'Position', 'Positions')} {ranges(v.absent)} "
+            f"of the result {were} not found by the second reading."
+        )
+    text.append("Check this page on the invoice.")
+    return " ".join(text)
 
 
 # The sentences that name no value, by (code, form). A check with several sentences has a
 # form for each of them and no (code, None) key: an issue of it that has neither values
-# nor a form has no sentence and keeps the flow's text. So does, on purpose, a reason of
-# quality.py that has no sentence here (photo_<code>, scan_<code>; none is raised today).
+# nor a form has no sentence and keeps the flow's text (and logs a warning). So does, on
+# purpose, a reason of quality.py that has no sentence here (photo_<code>, scan_<code>;
+# none is raised today).
 _PLAIN: dict[tuple[str, IssueForm | None], Wording] = {
     ("doc_sums", "supplier"): lambda i, line: (
         "The supplier's name was not read. Check who issued the invoice."
@@ -857,30 +825,20 @@ def _worded(issue: Issue, line: Line | None) -> str:
             return _glare(issue, values)
         case TooLarge():
             return _too_large(issue, values)
+        case SecondRow():
+            return _second_row(issue, values)
+        case SecondColumn():
+            return _second_column(issue, values)
+        case SecondPage():
+            return _second_page(issue, values)
         case _:
             assert_never(values)
-
-
-def _new(issue: Issue) -> bool:
-    """Transitional: the issue is worded from its values or form, never from its message."""
-    return issue.values is not None or (issue.check, issue.form) in _PLAIN
-
-
-def _parsed(issue: Issue, line: Line | None) -> str:
-    """Transitional: the text from the flow's message, or the message itself."""
-    word = ISSUE_TEXTS.get(issue.check)
-    text = word(issue, line) if word is not None else None
-    return text if text is not None else issue.message
 
 
 def issue_text(issue: Issue, line: Line | None = None) -> str:
     """The message of an issue for a person; line: the line the issue is about, if any."""
     try:
-        # Chosen before any wording runs: an issue with values or a form is never read
-        # from its message, even when its wording fails.
-        if _new(issue):
-            return _worded(issue, line)
-        return _parsed(issue, line)
+        return _worded(issue, line)
     except Exception:  # fault boundary: a wording must never cost the document its result
         logger.warning(
             "issue %s (form %r, values %s) could not be worded",

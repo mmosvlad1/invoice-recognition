@@ -7,7 +7,9 @@ import inspect
 import json
 import re
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
+from typing import get_args
 
 import httpx
 import pytest
@@ -22,6 +24,7 @@ from invoice_recognition.recognition import quality as ql
 from invoice_recognition.recognition import second_reading as sr
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
+from invoice_recognition.recognition.issue_values import HeaderNotPrinted, IssueValues, SubtotalOff
 from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import Doc, JSONObject, Line
 
@@ -89,10 +92,19 @@ def emitted_codes() -> set[str]:
     return literal | {f"photo_{c}" for c in photo} | {f"scan_{c}" for c in scan} | layout
 
 
+def worded_codes() -> set[str]:
+    """The codes that have a sentence: a sentence without values, or a shape of values
+    that names the code."""
+    plain = {code for code, _ in messages._PLAIN}
+    return plain | {code for shape in get_args(IssueValues.__value__) for code in shape.codes}
+
+
 def test_every_code_the_flow_raises_has_a_text_and_no_other_code_does() -> None:
     codes = emitted_codes()
     assert len(codes) >= 30  # the derivation found the flow's codes, not an empty set
-    assert set(messages.ISSUE_TEXTS) == codes
+    # Transitional: a code not yet given values is worded by the old table, never by both.
+    assert worded_codes().isdisjoint(messages.ISSUE_TEXTS)
+    assert worded_codes() | set(messages.ISSUE_TEXTS) == codes
 
 
 # --------------------------------------------------------------------------- #
@@ -115,7 +127,13 @@ def text(issue: Issue, line: Line | None = None) -> str:
     worded = messages.issue_text(issue, line)
     assert worded != issue.message, f"the flow's form is not recognised: {issue.message!r}"
     assert not [w for w in JARGON if w in worded.lower()], worded
-    _HIT.add(_rule(issue))
+    # Values or a form, never both; values only of a shape made for the issue's code.
+    assert issue.form is None or issue.values is None
+    assert issue.values is None or issue.check in type(issue.values).codes
+    # Transitional: a code that has left the old table is worded from data only.
+    assert issue.check in messages.ISSUE_TEXTS or messages._new(issue)
+    if not messages._new(issue):
+        _HIT.add(_rule(issue))
     return worded
 
 
@@ -301,8 +319,10 @@ def test_a_control_total_whose_label_has_a_line_break() -> None:
         "checkpoints": [{"label": "Carried\nforward", "amount": 50.0, "after_line": 2}]
     }
     [issue] = checks.check_checkpoints(d)
-    # A known gap: the pattern does not take a line break.
-    assert leaked(issue) == 'lines 1-2 add up to 40.0, but "Carried\nforward" says 50.0'
+    assert text(issue) == (
+        'Line items 1–2 add up to 40.0, but the printed "Carried\nforward" is 50.0. A line '
+        "in this range may be missing, read twice or misread: check them."
+    )
 
 
 PAGE = "ACME Ltd Invoice INV-7\nAB-1001 Item 2 10.00 20.00\nAB-1002 Item 3 5.00 15.00\nTotal 35.00"
@@ -386,8 +406,59 @@ def test_an_identifier_with_a_tab_or_a_line_break() -> None:
         "may have been misread: check it on the invoice."
     )
     [broken] = checks.check_header_grounding(doc([], po_number="PO\n1"), evidence)
-    # A known gap: the pattern does not take a line break.
-    assert leaked(broken) == 'po_number "PO\n1" is not printed anywhere in the document'
+    assert text(broken) == (
+        "The purchase order number read as PO\n1 is not printed anywhere in the document. It "
+        "may have been misread: check it on the invoice."
+    )
+
+
+# Text the model read, as it may come: with a line break, with a lone surrogate (JSON
+# allows one; the view replaces it), very long.
+HOSTILE = ["A\nB", "A\ud800B", "A" * 200_000]
+
+
+@pytest.mark.parametrize("label", HOSTILE, ids=["line-break", "surrogate", "long"])
+def test_a_control_total_label_is_quoted_as_printed(label: str) -> None:
+    d = doc([line(1), line(2)]) | {
+        "checkpoints": [{"label": label, "amount": 50.0, "after_line": 2}]
+    }
+    [issue] = checks.check_checkpoints(d)
+    assert text(issue) == (
+        f'Line items 1–2 add up to 40.0, but the printed "{label}" is 50.0. A line in this '
+        "range may be missing, read twice or misread: check them."
+    )
+
+
+@pytest.mark.parametrize("value", HOSTILE, ids=["line-break", "surrogate", "long"])
+def test_an_identifier_is_quoted_as_compared(value: str) -> None:
+    evidence = ev.build([PAGE], "text_layer")
+    [issue] = checks.check_header_grounding(doc([], invoice_number=value), evidence)
+    assert text(issue) == (
+        f"The invoice number read as {value.upper()} is not printed anywhere in the document. "
+        "It may have been misread: check it on the invoice."
+    )
+
+
+def test_a_lone_surrogate_reaches_the_view_as_a_question_mark() -> None:
+    d = doc([line(1), line(2)]) | {
+        "checkpoints": [{"label": "A\ud800B", "amount": 50.0, "after_line": 2}]
+    }
+    res = Result(
+        status="needs_review",
+        header=header_for(d["lines"]),
+        lines=d["lines"],
+        checkpoints=[],
+        issues=checks.check_checkpoints(d),
+        pages=[],
+        evidence_source="none",
+        duration_s=1.0,
+        calls=1,
+        cost_usd=0.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+    )
+    [issue] = json.loads(result_view(res).model_dump_json())["issues"]
+    assert '"A?B"' in issue["message"]
 
 
 def test_line_items_missing_from_a_page() -> None:
@@ -963,10 +1034,56 @@ def test_a_form_the_wording_does_not_know_keeps_the_flows_message() -> None:
 
 
 def test_a_wording_that_breaks_keeps_the_flows_message(caplog: pytest.LogCaptureFixture) -> None:
-    # A number the pattern takes but Decimal cannot read.
-    issue = Issue("doc_sums", "subtotal 1.2.3 + tax 1 != total 2")
+    # A header value whose issue names no field of the header.
+    issue = Issue("grounding_header", "as written", values=HeaderNotPrinted("INV-1"))
     assert messages.issue_text(issue) == issue.message
     assert "could not be worded" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "issue",
+    [
+        Issue("tax", "as written", values=SubtotalOff(Decimal(1), Decimal(2), Decimal(-1))),
+        Issue(
+            "doc_sums",
+            "as written",
+            form="totals_missing",
+            values=SubtotalOff(Decimal(1), Decimal(2), Decimal(-1)),
+        ),
+    ],
+    ids=["shape-of-another-code", "form-and-values"],
+)
+def test_values_that_do_not_fit_the_issue_keep_the_flows_message(
+    issue: Issue, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Hand-built: a programming error at a call site is never worded as another sentence.
+    assert messages.issue_text(issue) == "as written"
+    assert "could not be worded" in caplog.text
+
+
+def test_an_issue_with_values_is_never_read_from_its_message(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Transitional: while the old table exists, an issue whose wording fails keeps the
+    # flow's text; the patterns are never tried on it.
+    parsed: list[Issue] = []
+
+    def spy(issue: Issue, line: Line | None) -> str:
+        parsed.append(issue)
+        return "from the message"
+
+    def broken(values: SubtotalOff) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(messages, "_parsed", spy)
+    monkeypatch.setattr(messages, "_subtotal_off", broken)
+    [issue] = checks.check_doc_sums(
+        doc([line(1)], supplier_name="ACME", subtotal=30.0, tax_total=6.0, total=36.0)
+    )
+    assert isinstance(issue.values, SubtotalOff)
+    assert messages.issue_text(issue) == issue.message
+    assert "could not be worded" in caplog.text
+    assert parsed == []
 
 
 def test_a_row_without_a_page_still_reads_as_a_sentence() -> None:
@@ -997,6 +1114,6 @@ def test_every_pattern_of_the_wording_table_is_pinned(request: pytest.FixtureReq
     for code in messages.ISSUE_TEXTS:
         patterns = _patterns(code)
         table |= {(code, None)} if patterns is None else {(code, k) for k in range(len(patterns))}
-    # 44 patterns and 6 wordings that need none.
-    assert (len(table), sum(1 for _, k in table if k is None)) == (50, 6)
+    # The patterns of the codes not yet given values, and the wordings that need none.
+    assert (len(table), sum(1 for _, k in table if k is None)) == (31, 5)
     assert table - _HIT == set()

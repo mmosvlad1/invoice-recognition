@@ -18,11 +18,28 @@ Expected shape of `doc`:
 
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import asdict, dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, cast
 
 from invoice_recognition.recognition.evidence import CENT, Evidence, money, printed_forms
+from invoice_recognition.recognition.issue_values import (
+    ControlTotalOff,
+    DocumentCoverage,
+    HeaderNotPrinted,
+    IssueForm,
+    IssueValues,
+    LineProduct,
+    MissingNumbers,
+    PageCoverage,
+    RepeatedNumbers,
+    SubtotalOff,
+    TaxNoRow,
+    TaxRateOff,
+    TaxTotalOff,
+    TotalOff,
+)
 from invoice_recognition.shapes import Checkpoint, Doc, Header, JSONObject, Line
 
 
@@ -46,9 +63,18 @@ class Issue:
     # Positions in Result.issues of the issues that explain this one: the same mistake,
     # seen by another check.
     follows_from: list[int] = field(default_factory=list)
+    # What the text a person reads (api/messages.py) needs: which of the check's sentences
+    # that name no value this is, or the values its sentence names. Set where the values
+    # are computed. Not in to_json(): the flow's record keeps `message`, its words for a
+    # developer.
+    form: IssueForm | None = None
+    values: IssueValues | None = field(default=None, repr=False)
 
     def to_json(self) -> JSONObject:
-        out = asdict(self)
+        # From the fields, not asdict(): that would copy form and values too.
+        out = {
+            f.name: deepcopy(getattr(self, f.name)) for f in fields(self) if f.name not in _WORDING
+        }
         # Left out when unknown or empty: most issues are not about a numbered line and
         # have nothing to suggest, and their JSON then has only the keys every issue has.
         if out["line_no"] is None:
@@ -58,6 +84,9 @@ class Issue:
                 del out[key]
         return out
 
+
+# The fields of an Issue that only the text for a person reads.
+_WORDING = ("form", "values")
 
 # No figure on an invoice needs a decimal exponent beyond this, either way.
 _MAX_EXPONENT = 100
@@ -134,9 +163,11 @@ def _doc_sums(doc: Doc) -> dict[str, Issue]:
     supplier = header.get("supplier_name")
     # A number, list or object is not a supplier name.
     if not (isinstance(supplier, str) and supplier.strip()):
-        out["supplier"] = Issue("doc_sums", "supplier is missing", fields=["header.supplier_name"])
+        out["supplier"] = Issue(
+            "doc_sums", "supplier is missing", fields=["header.supplier_name"], form="supplier"
+        )
     if not lines:
-        return out | {"lines": Issue("doc_sums", "no line items")}
+        return out | {"lines": Issue("doc_sums", "no line items", form="no_lines")}
     subtotal, tax, total = (dec(header.get(k)) for k in ("subtotal", "tax_total", "total"))
     if subtotal is None or tax is None or total is None:
         missing = [
@@ -145,24 +176,37 @@ def _doc_sums(doc: Doc) -> dict[str, Issue]:
             if v is None
         ]
         return out | {
-            "totals": Issue("doc_sums", "totals are missing in the header", fields=missing)
+            "totals": Issue(
+                "doc_sums",
+                "totals are missing in the header",
+                fields=missing,
+                form="totals_missing",
+            )
         }
     if any(dec(item.get("amount")) is None for item in lines):
         # One issue for every line without an amount: the column, not each row.
-        out["amounts"] = Issue("doc_sums", "some lines have no amount", fields=["line.amount"])
+        out["amounts"] = Issue(
+            "doc_sums",
+            "some lines have no amount",
+            fields=["line.amount"],
+            form="amounts_missing",
+        )
     lines_sum = _lines_sum(lines)
-    if abs(lines_sum - subtotal) > CENT:
+    difference = lines_sum - subtotal
+    if abs(difference) > CENT:
         out["subtotal"] = Issue(
             "doc_sums",
             f"lines add up to {lines_sum}, invoice subtotal is {subtotal} "
-            f"(difference {lines_sum - subtotal})",
+            f"(difference {difference})",
             fields=["header.subtotal", "line.amount"],
+            values=SubtotalOff(lines_sum, subtotal, difference),
         )
     if abs(subtotal + tax - total) > CENT:
         out["total"] = Issue(
             "doc_sums",
             f"subtotal {subtotal} + tax {tax} != total {total}",
             fields=["header.subtotal", "header.tax_total", "header.total"],
+            values=TotalOff(subtotal, tax, total),
         )
     return out
 
@@ -195,13 +239,15 @@ def check_line_math(doc: Doc) -> list[Issue]:
                         if a is None and q is not None and p is not None
                         else []
                     ),
+                    form="unusable",
                 )
             )
-        elif abs(money(q * p) - a) > CENT:
+        elif abs((product := money(q * p)) - a) > CENT:
             hint = ""
             # Arithmetic cannot say which of the three numbers is wrong; the hint can.
             doubt = ["line.quantity", "line.unit_price", "line.amount"]
-            if abs(money(q * 1000 * p) - a) <= CENT:
+            thousands = abs(money(q * 1000 * p) - a) <= CENT
+            if thousands:
                 hint = (
                     " (quantity looks 1000x too small: thousands separator read as a decimal point)"
                 )
@@ -209,11 +255,12 @@ def check_line_math(doc: Doc) -> list[Issue]:
             out.append(
                 Issue(
                     "line_math",
-                    f"{q} x {p} = {money(q * p)}, but amount is {a}{hint}",
+                    f"{q} x {p} = {product}, but amount is {a}{hint}",
                     line=i,
                     page=item.get("page"),
                     fields=doubt,
                     suggestions=_line_alternatives(q, p, a, doubt),
+                    values=LineProduct(q, p, product, a, thousands),
                 )
             )
     return out
@@ -309,18 +356,25 @@ def _tax(doc: Doc) -> dict[object, Issue]:
             base_lines = by_rate.get(rate, Decimal(0)) if rate is not None else Decimal(0)
             base_printed = (printed.get(rate) or (None, None))[0]
             if base_printed is None:
-                if base_lines:
+                # No line is at a rate that is not a number (base_lines is 0).
+                if base_lines and rate is not None:
                     out[rate] = Issue(
                         "tax",
                         f"lines carry {rate}% tax on {base_lines}, "
                         f"but the invoice has no {rate}% row",
                         fields=["line.tax_rate", "header.tax_breakdown"],
+                        values=TaxNoRow(rate, base_lines),
                     )
             elif abs(base_lines - base_printed) > CENT:
                 out[rate] = Issue(
                     "tax",
                     f"lines at {rate}% add up to {base_lines}, invoice says {base_printed}",
                     fields=["line.tax_rate", "line.amount", "header.tax_breakdown"],
+                    # A printed rate that is not a number has no sentence (yet): the person
+                    # reads this message.
+                    values=(
+                        TaxRateOff(rate, base_lines, base_printed) if rate is not None else None
+                    ),
                 )
     else:
         tax_total = dec(header.get("tax_total"))
@@ -333,6 +387,7 @@ def _tax(doc: Doc) -> dict[object, Issue]:
                 "tax",
                 f"tax computed from lines is {expected}, invoice says {tax_total}",
                 fields=["header.tax_total", "line.tax_rate"],
+                values=TaxTotalOff(expected, tax_total),
             )
     return out
 
@@ -351,11 +406,13 @@ def check_numbering(doc: Doc) -> list[Issue]:
     out = []
     dup = [n for n, c in Counter(ints).items() if c > 1]
     if dup:
+        shown = sorted(dup)[:10]
         out.append(
             Issue(
                 "numbering",
-                f"position numbers repeated: {sorted(dup)[:10]}",
+                f"position numbers repeated: {shown}",
                 fields=["line.line_no"],
+                values=RepeatedNumbers(tuple(shown)),
             )
         )
     present = set(ints)
@@ -364,14 +421,16 @@ def check_numbering(doc: Doc) -> list[Issue]:
         first_after = {n: i for i, n in reversed(list(enumerate(nos))) if isinstance(n, int)}
         nxt = next((first_after[n] for n in sorted(present) if n > missing[0]), None)
         page = lines[nxt].get("page") if nxt is not None else None
+        listed = missing[:10]
         out.append(
             Issue(
                 "numbering",
-                f"{len(missing)} position number(s) missing, e.g. {missing[:10]}",
+                f"{len(missing)} position number(s) missing, e.g. {listed}",
                 line=nxt,
                 page=page,
                 # A whole row is missing before this one; no cell of this one is in doubt.
                 fields=[],
+                values=MissingNumbers(len(missing), tuple(listed)),
             )
         )
     return out
@@ -418,7 +477,7 @@ def _checkpoints(doc: Doc, partial: bool) -> dict[range, Issue]:
             prev_pos, prev_amount = pos, amount
             continue
         if abs(segment - amount) > CENT and abs(prev_amount + segment - amount) > CENT:
-            label = c.get("label") or "control total"
+            label = str(c.get("label") or "control total")
             out[range(prev_pos, pos)] = Issue(
                 "checkpoints",
                 f'lines {prev_pos + 1}-{pos} add up to {segment}, but "{label}" says {amount}',
@@ -427,6 +486,7 @@ def _checkpoints(doc: Doc, partial: bool) -> dict[range, Issue]:
                 # Not "line.amount": the line is only the first row of the segment, and
                 # framing its amount would point at a cell that may well be right.
                 fields=[],
+                values=ControlTotalOff(prev_pos + 1, pos, segment, amount, label),
             )
         prev_pos, prev_amount = pos, amount
     return out
@@ -639,6 +699,7 @@ def check_header_grounding(doc: Doc, evidence: Evidence) -> list[Issue]:
                     "grounding_header",
                     f"{key} {v} is not printed anywhere in the document",
                     fields=[f"header.{key}"],
+                    values=HeaderNotPrinted(v),
                 )
             )
     for key in ("invoice_number", "supplier_tax_id", "po_number"):
@@ -649,6 +710,7 @@ def check_header_grounding(doc: Doc, evidence: Evidence) -> list[Issue]:
                     "grounding_header",
                     f'{key} "{s}" is not printed anywhere in the document',
                     fields=[f"header.{key}"],
+                    values=HeaderNotPrinted(s),
                 )
             )
     return out
@@ -662,18 +724,24 @@ def check_coverage(doc: Doc, evidence: Evidence) -> list[Issue]:
     if lines and all(isinstance(item.get("page"), int) for item in lines):
         got = Counter(item["page"] for item in lines)
         for p in evidence.pages:
-            want = len(p.item_rows)
-            if want != got.get(p.number, 0):
+            want, read = len(p.item_rows), got.get(p.number, 0)
+            if want != read:
                 out.append(
                     Issue(
                         "coverage",
-                        f"page {p.number}: {want} item rows printed, "
-                        f"{got.get(p.number, 0)} extracted",
+                        f"page {p.number}: {want} item rows printed, {read} extracted",
                         page=p.number,
+                        values=PageCoverage(want, read),
                     )
                 )
     else:
         want = sum(len(p.item_rows) for p in evidence.pages)
         if want != len(lines):
-            out.append(Issue("coverage", f"{want} item rows printed, {len(lines)} extracted"))
+            out.append(
+                Issue(
+                    "coverage",
+                    f"{want} item rows printed, {len(lines)} extracted",
+                    values=DocumentCoverage(want, len(lines)),
+                )
+            )
     return out

@@ -1,0 +1,39 @@
+# The app in one locked-down container. Its port is published on this machine's loopback only:
+# processes on this machine reach it, and so do containers on it (through host.docker.internal with
+# Docker Desktop, or at app:8000 on this project's own network); other machines on the network do not.
+#   cp .env.example .env          # fill in OPENROUTER_API_KEY and ACCESS_CODE
+#   docker compose up -d --build --wait
+#   open http://127.0.0.1:8000    # another port: HOST_PORT=8080 in .env
+#   docker compose down           # every job is lost
+# Never paste the output of `docker compose config` or `docker inspect`: it shows the settings' values.
+name: invoice-recognition
+
+services:
+  app:
+    build: .
+    env_file:
+      - path: ${ENV_FILE:-.env}
+        required: true
+    ports:
+      # Loopback only: without 127.0.0.1 Docker publishes the port on every interface.
+      - "127.0.0.1:${HOST_PORT:-8000}:8000"
+    read_only: true
+    tmpfs:
+      # Uploads over 1 MB are spooled here by the form parser while they are checked. Its size counts
+      # against the memory limit below, so it stays small: about a dozen 10 MB uploads arriving at the
+      # same moment fill it, and the surplus is refused with 400 invalid_request rather than 503.
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # A hard limit, swap included: an overrun kills the process and the restart below starts it again,
+    # empty — every job and upload is lost. Peaks measured with these limits: up to about 1.3 GiB with
+    # JOBS_KEPT=50 and about 1.0 GiB with JOBS_KEPT=20 (README, "Limitations").
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 2
+    pids_limit: 256
+    restart: unless-stopped
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

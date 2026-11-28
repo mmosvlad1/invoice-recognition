@@ -154,9 +154,10 @@ JOB_ERRORS = {
     "scan_unreadable": "No page of the scan could be read.",
     "unreadable_file": "The file could not be opened for reading. It may be damaged or "
     "incomplete; export or scan it again.",
-    "model_unavailable": "The model that reads invoices could not be reached: every request "
-    "to it failed. Please try again later; if this keeps happening, tell the person who runs "
-    "this service.",
+    # True whether one model was tried or a backup model as well.
+    "model_unavailable": "No model could be reached to read this invoice: every request "
+    "failed. Please try again later; if this keeps happening, tell the person who runs this "
+    "service.",
     "no_line_items": "The model answered, but no line items were found in the document.",
     "no_header": "Line items were read, but the header and totals were not, so nothing could "
     "be checked.",

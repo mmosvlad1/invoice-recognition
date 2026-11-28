@@ -306,6 +306,10 @@ def api_settings(**overrides: Any) -> Settings:
     request leaves the test."""
     given = {name: f.default for name, f in Settings.model_fields.items() if not f.is_required()}
     given["openrouter_api_key"] = SecretStr("test-key")
+    # The backup model off: the fake servers answer by prompt, so a request to it would be
+    # answered as the first model's next attempt. A test that wants it sets it and routes
+    # its requests by model.
+    given["fallback_model"] = ""
     return Settings(_env_file=None, **(given | overrides))
 
 

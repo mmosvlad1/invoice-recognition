@@ -365,10 +365,16 @@ def _rate_unreadable(v: RateUnreadable) -> str:
 
 
 def _repeated(v: RepeatedNumbers) -> str:
-    if len(v.numbers) == 1:
+    if v.count == 1:
         return (
             f"Position number {v.numbers[0]} appears more than once. A line may have been read "
             "twice: check the lines with this number."
+        )
+    if v.count > len(v.numbers):  # the flow lists the first ten
+        return (
+            f"{v.count} position numbers appear more than once, for example "
+            f"{_numbers(v.numbers)}. Lines may have been read twice: check the lines with these "
+            "numbers."
         )
     return (
         f"Position numbers {_numbers(v.numbers)} appear more than once. Lines may have been "

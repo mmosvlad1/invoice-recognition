@@ -96,9 +96,10 @@ class RateUnreadable:
 
 @dataclass(frozen=True, slots=True)
 class RepeatedNumbers:
-    """Position numbers printed on more than one line: the first ten, in order."""
+    """Position numbers printed on more than one line: how many, and the first ten."""
 
     codes: ClassVar[frozenset[str]] = frozenset({"numbering"})
+    count: int
     numbers: tuple[int, ...]
 
 

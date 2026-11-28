@@ -41,3 +41,33 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+  # The container: what the README runs and the demo is served from. It runs in parallel with
+  # the checks above and is not a required check.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the Docker versions
+        run: docker version --format 'Docker {{.Server.Version}}' && docker compose version
+
+      # The suite in the image's own Linux (Debian slim, no fonts), against the installed package,
+      # offline and on a read-only root like the app. The image has no Node, so the one test that
+      # runs the page's script tests with Node is deselected here, by name; the checks job runs
+      # it. CI is set inside the container so that any other test needing a missing tool fails
+      # instead of skipping.
+      - name: Run the tests in the image (page script tests run in the checks job)
+        run: |
+          docker build --target test -t invoice-recognition-test .
+          docker run --rm --network none --read-only --tmpfs /tmp -e CI=true \
+            invoice-recognition-test /app/.venv/bin/pytest -q -p no:cacheprovider \
+            --deselect tests/test_web_js.py::test_the_page_scripts
+
+      # compose.yaml as written, with a dummy key and a black-holed proxy: nothing leaves the runner.
+      - name: Smoke-test the app container
+        run: scripts/smoke.sh

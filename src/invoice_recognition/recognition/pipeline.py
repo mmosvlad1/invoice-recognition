@@ -60,7 +60,7 @@ from concurrent.futures import Executor
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import httpx
 from PIL import Image
@@ -78,6 +78,7 @@ from invoice_recognition.recognition import boxes as bx
 from invoice_recognition.recognition import carryover as co
 from invoice_recognition.recognition import checks, photo
 from invoice_recognition.recognition import evidence as ev
+from invoice_recognition.recognition import issue_values as iv
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition import quality as ql
 from invoice_recognition.recognition import second_reading as sr
@@ -479,7 +480,7 @@ async def read_page(
         failed = bool(res.error) or parsed is None
         if failed:
             why = res.error or f"answer is not valid JSON (finish={res.finish_reason})"
-            issues.append(Issue("page_read", why, page=page))
+            issues.append(Issue("page_read", why, page=page, form="failed"))
         else:
             counts.append(len(lines))
             # Without a text layer nothing else notices a page that came back empty
@@ -499,6 +500,7 @@ async def read_page(
                     "rows_dropped",
                     f"{dropped} row(s) of the answer have neither sku nor amount and were left out",
                     page=page,
+                    values=iv.RowsDropped(dropped),
                 )
             )
         attempts.append(_attempt(res, len(lines), len(issues)))
@@ -527,9 +529,7 @@ async def read_page(
         # One page_read issue for the page, this one: the error of each cut attempt (its
         # timeout, shortened to the deadline) stays in its Attempt.
         best.issues = [i for i in best.issues if i.check != "page_read"]
-        best.issues.append(
-            Issue("page_read", deadline_unread_text(page, len(best.lines)), page=page)
-        )
+        best.issues.append(deadline_unread_issue(page, len(best.lines)))
         best.deadline_unread = True
     best.attempts = attempts
     if evidence is None and len(set(counts)) > 1:
@@ -539,6 +539,7 @@ async def read_page(
                 "attempts_disagree",
                 "attempts returned different numbers of lines: " + " and ".join(map(str, counts)),
                 page=page,
+                values=iv.AttemptCounts(tuple(counts)),
             )
         )
     return best
@@ -710,6 +711,15 @@ def compare_second(
     return issues, note
 
 
+def deadline_unread_issue(page: int, lines: int) -> Issue:
+    """The page_read issue of a page no attempt at which ran to its end; lines: the line
+    items kept from a cut attempt."""
+    text = deadline_unread_text(page, lines)
+    if not lines:
+        return Issue("page_read", text, page=page, form="not_read")
+    return Issue("page_read", text, page=page, values=iv.CutByDeadline(lines))
+
+
 def deadline_unread_text(page: int, lines: int) -> str:
     """The message of the page_read issue of a page no attempt at which ran to its end;
     lines: the line items kept from a cut attempt."""
@@ -806,19 +816,27 @@ def layout_pages(
         # Fault boundary: a bug here is this page's problem; the model reads it.
         except Exception as e:
             logger.warning("checks of page %d found by code failed", p, exc_info=True)
-            issues = [Issue("page_read", f"{type(e).__name__}: {e}", page=p)]
+            issues = [Issue("page_read", f"{type(e).__name__}: {e}", page=p, form="failed")]
         issues += [
-            Issue(
-                "layout_row",
-                f"{note['kind']}: {note['text']}",
-                page=p,
-                fields=list(NOTE_FIELDS.get(note["kind"], [])),
-            )
+            _layout_row_issue(note, p)
             for note in parsed.notes
             if note["page"] == p and note["kind"] not in HARMLESS_NOTES
         ]
         pages[p] = PageResult(p, by_page[p], totals[p], issues, method="layout")
     return pages, [note for note in parsed.notes if note["kind"] in HARMLESS_NOTES]
+
+
+def _layout_row_issue(note: JSONObject, page: int) -> Issue:
+    """A note of the parser about a row it placed, as an issue of the row's page."""
+    kind, row = note["kind"], str(note["text"])
+    return Issue(
+        "layout_row",
+        f"{kind}: {row}",
+        page=page,
+        fields=list(NOTE_FIELDS.get(kind, [])),
+        # A kind of note without a sentence keeps this message.
+        values=iv.LayoutRow(kind, row) if kind in get_args(iv.LayoutRowKind) else None,
+    )
 
 
 def compare_witness(code: list[Line], model: list[Line]) -> JSONObject:
@@ -940,31 +958,65 @@ def _photo_issue(r: ql.Reason, lim: ql.Limits) -> Issue:
     was held against."""
     side = f" ({r.side} side)" if r.side else ""
     reject = r.severity == "reject"
-    limit = lim.sharpness_reject if reject else lim.sharpness_warn
-    blurred = f"Text sharpness {r.value} is below {limit:g}." + (
-        "" if reject else " Numbers are usually still read; item codes (SKUs) may be misread."
-    )
-    no_text = (
-        f"No text was found in the photo ({r.value:.0f} word-like regions, "
-        f"at least {lim.min_boxes} needed)."
-        if r.value is not None
-        else ""
-    )
-    text = {
-        "no_text": no_text,
-        "text_at_edge": f"Text reaches the edge of the frame{side}, {r.value} text heights "
-        "from it: part of the document is outside the photo.",
-        "sheet_cut": f"The sheet runs out of the frame{side}; no text is near that edge.",
-        "sheet_edge_unseen": "No edge of the sheet is visible, so nothing confirms that the "
-        "whole document is in the photo.",
-        "blurred": blurred,
-        "dark": f"Paper brightness {r.value} of 255 is below {lim.paper_level:g}.",
-        "glare": f"Glare covers {(r.value or 0) * 100:.1f}% of the sheet.",
-        "text_small": f"Text lines are {r.value} px tall, below {lim.text_height_px:g}.",
-    }.get(r.code) or r.code
+    values: iv.IssueValues | None = None
+    match r.code:
+        case "no_text":
+            text = (
+                f"No text was found in the photo ({r.value:.0f} word-like regions, "
+                f"at least {lim.min_boxes} needed)."
+                if r.value is not None
+                else ""
+            )
+        case "text_at_edge":
+            text = (
+                f"Text reaches the edge of the frame{side}, {r.value} text heights from it: "
+                "part of the document is outside the photo."
+            )
+            values = iv.FrameSide(r.side)
+        case "sheet_cut":
+            text = f"The sheet runs out of the frame{side}; no text is near that edge."
+            values = iv.FrameSide(r.side)
+        case "sheet_edge_unseen":
+            text = (
+                "No edge of the sheet is visible, so nothing confirms that the whole document "
+                "is in the photo."
+            )
+        case "blurred":
+            limit = lim.sharpness_reject if reject else lim.sharpness_warn
+            text = f"Text sharpness {r.value} is below {limit:g}." + (
+                ""
+                if reject
+                else " Numbers are usually still read; item codes (SKUs) may be misread."
+            )
+            values = _measured(r, limit)
+        case "dark":
+            text = f"Paper brightness {r.value} of 255 is below {lim.paper_level:g}."
+            values = _measured(r, lim.paper_level)
+        case "glare":
+            share = r.value or 0
+            text = f"Glare covers {share * 100:.1f}% of the sheet."
+            values = iv.Glare(share)
+        case "text_small":
+            text = f"Text lines are {r.value} px tall, below {lim.text_height_px:g}."
+            values = _measured(r, lim.text_height_px)
+        case _:
+            text = ""
+    text = text or r.code
     if reject:
         text += " No request was sent."
-    return Issue(f"photo_{r.code}", text, page=1, severity="error" if reject else "warning")
+    return Issue(
+        f"photo_{r.code}",
+        text,
+        page=1,
+        severity="error" if reject else "warning",
+        values=values,
+    )
+
+
+def _measured(r: ql.Reason, limit: float) -> iv.Measured | None:
+    """The number a reason measured and its limit; none without a number (a reason that
+    measures one always has it)."""
+    return None if r.value is None else iv.Measured(r.value, limit)
 
 
 def _photo_quality(img: Image.Image, cfg: Config) -> tuple[JSONObject, list[Issue]]:
@@ -999,14 +1051,26 @@ def _photo_quality(img: Image.Image, cfg: Config) -> tuple[JSONObject, list[Issu
 def _scan_issue(r: ql.Reason, page: int, lim: ql.ScanLimits) -> Issue:
     """A reject or warn reason of a scanned page as an issue, with the number and its limit."""
     reject = r.severity == "reject"
-    limit = lim.sharpness_reject if reject else lim.sharpness_warn
-    text = {
-        "blurred": f"Text sharpness {r.value} of the page is below {limit:g}.",
-        "dark": f"Paper brightness {r.value} of 255 is below {lim.paper_level:g}.",
-    }.get(r.code) or r.code
+    values: iv.Measured | None = None
+    match r.code:
+        case "blurred":
+            limit = lim.sharpness_reject if reject else lim.sharpness_warn
+            text = f"Text sharpness {r.value} of the page is below {limit:g}."
+            values = _measured(r, limit)
+        case "dark":
+            text = f"Paper brightness {r.value} of 255 is below {lim.paper_level:g}."
+            values = _measured(r, lim.paper_level)
+        case _:
+            text = r.code
     if reject:
         text += " The page was not sent to the model."
-    return Issue(f"scan_{r.code}", text, page=page, severity="error" if reject else "warning")
+    return Issue(
+        f"scan_{r.code}",
+        text,
+        page=page,
+        severity="error" if reject else "warning",
+        values=values,
+    )
 
 
 def _too_large_issue(q: ql.TooLarge, page: int) -> Issue:
@@ -1016,6 +1080,7 @@ def _too_large_issue(q: ql.TooLarge, page: int) -> Issue:
         "be opened. The page was not sent to the model.",
         page=page,
         severity="error",
+        values=iv.TooLarge(q.pixels, q.limit),
     )
 
 
@@ -1273,6 +1338,15 @@ async def read_header(
 def page_ranges(pages: list[int]) -> str:
     """[2, 5, 6, 7, 12] -> "2, 5–7 and 12"."""
     return checks.ranges(pages)
+
+
+def deadline_issue(deadline_s: float, unread: list[int], header_read: bool) -> Issue:
+    """The issue "deadline_exceeded": the pages and the header not read."""
+    return Issue(
+        "deadline_exceeded",
+        deadline_text(deadline_s, unread, header_read),
+        values=iv.DeadlineStop(deadline_s, tuple(unread), header_read),
+    )
 
 
 def deadline_text(deadline_s: float | None, unread: list[int], header_read: bool) -> str:
@@ -1616,7 +1690,7 @@ async def _read(
                 r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask, gate=gate)
             except Exception as e:  # fault boundary: whatever breaks while reading one page
                 logger.warning("page %d could not be read", p, exc_info=True)
-                issue = Issue("page_read", f"{type(e).__name__}: {e}", page=p)
+                issue = Issue("page_read", f"{type(e).__name__}: {e}", page=p, form="failed")
                 r = PageResult(p, issues=[issue])
             # A doubtful page of a scan: read as usual, flagged with its reason.
             r.issues += scan_issues.get(p, [])
@@ -1705,32 +1779,44 @@ async def _read(
                     if layout_info["status"] == "swapped"
                     else "the rows differ"
                 )
+                same, compared, crossed = (
+                    layout_info["same"],
+                    layout_info["compared"],
+                    layout_info["crossed"],
+                )
                 layout_issues.append(
                     Issue(
                         f"layout_{layout_info['status']}",
                         page=wp,
                         message=(
                             f"rows found by code and rows read by the model disagree on page "
-                            f"{wp}: {what} ({layout_info['same']} of {layout_info['compared']} "
-                            f"agree, {layout_info['crossed']} crossed); the document was read "
-                            "page by page by the model"
+                            f"{wp}: {what} ({same} of {compared} agree, {crossed} crossed); the "
+                            "document was read page by page by the model"
                         ),
                         # Crossed columns: one issue for the document, about the two
                         # columns (no line), never one per row.
                         fields=list(CROSSED_COLUMNS) if layout_info["status"] == "swapped" else [],
+                        values=iv.RowsCompared(same, compared, crossed),
                     )
                 )
         else:
             if layout_info["status"] == "unverified":
+                stopped = seen is not None and seen.deadline_unread
                 why = (
                     f"the check read of page {wp} was stopped by the time limit for the "
                     "document, so the rows found by code were not confirmed"
-                    if seen is not None and seen.deadline_unread
+                    if stopped
                     else f"the model returned no rows for page {wp}, so nothing confirms "
                     "which column is quantity and which is unit price"
                 )
                 layout_issues.append(
-                    Issue("layout_unverified", page=wp, message=why, fields=list(CROSSED_COLUMNS))
+                    Issue(
+                        "layout_unverified",
+                        page=wp,
+                        message=why,
+                        fields=list(CROSSED_COLUMNS),
+                        form="deadline" if stopped else "no_rows",
+                    )
                 )
             found = by_code
 
@@ -1807,9 +1893,8 @@ async def _read(
 
     issues += layout_issues + photo_issues
     unread = [p.page for p in pages if p.deadline_unread]
-    if gate.hit:
-        text = deadline_text(cfg.deadline_s, unread, header_read)
-        issues.append(Issue("deadline_exceeded", text))
+    if gate.hit and cfg.deadline_s is not None:  # the gate is hit only with a deadline
+        issues.append(deadline_issue(cfg.deadline_s, unread, header_read))
     # Last: every other issue keeps its position (its id) with or without a second reading.
     issues += second_issues
     link_issues(pages, doc, issues, document)

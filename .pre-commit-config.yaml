@@ -12,7 +12,8 @@ repos:
       - id: check-yaml
       - id: check-merge-conflict
       - id: check-added-large-files
-        exclude: ^src/invoice_recognition/web/static/vendor/
+        # The deck of part 1 is one PDF of about 1 MB (fonts and three page images).
+        exclude: ^(src/invoice_recognition/web/static/vendor/|docs/part-1-analysis\.pdf$)
 
   # Keep rev equal to the ruff version pinned in uv.lock, so the hook and
   # `uv run ruff` in CI apply the same rules and formatting.

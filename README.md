@@ -17,6 +17,16 @@ values framed in amber, the issues and their suggestions on the right](docs/scre
 that disagree are framed on the page, and the issues that follow from it sit under the
 line.*
 
+## The analysis part of the task
+
+The task had two parts, and this app is the second. The first was an analysis: what is
+wrong with the flow the task describes, how to read large documents, which approaches
+were compared and on what figures, how others do it, how to measure an improvement,
+and what a person should see when a result is not reliable. It is a deck of 18 slides,
+in Ukrainian: [docs/part-1-analysis.pdf](docs/part-1-analysis.pdf). Its figures were
+measured on generated test invoices with the research prototype this app's flow was
+ported from.
+
 ## Quick start with Docker
 
 Needs Docker with Compose 2.24 or newer and an OpenRouter API key.

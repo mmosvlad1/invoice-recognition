@@ -148,6 +148,114 @@ class DocumentCoverage:
     read: int
 
 
+# --------------------------------------------------------------------------- #
+# A page, and a PDF whose rows were found by code (pipeline.py)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class CutByDeadline:
+    """A page no attempt at which ran to its end; lines: the line items kept from a cut
+    attempt (at least one: a page with none is the form "not_read")."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"page_read"})
+    lines: int
+
+
+@dataclass(frozen=True, slots=True)
+class RowsDropped:
+    """Rows of a page's answer with neither an item code nor an amount, left out."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"rows_dropped"})
+    rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptCounts:
+    """The line items each clean reading of a page found, in the order read."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"attempts_disagree"})
+    counts: tuple[int, ...]
+
+
+# What the parser of a PDF's text could not place, in a row it did place.
+LayoutRowKind = Literal["stray_words", "no_tax_rate", "text_under_item"]
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutRow:
+    """A row the parser of the PDF's text could not place fully: what is wrong with it,
+    and the row as printed."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"layout_row"})
+    kind: LayoutRowKind
+    row: str
+
+
+@dataclass(frozen=True, slots=True)
+class RowsCompared:
+    """The rows found by code against the same page read by the model: how many agree,
+    how many were compared, and in how many quantity and unit price are crossed."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"layout_swapped", "layout_mismatch"})
+    same: int
+    compared: int
+    crossed: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeadlineStop:
+    """The document's time limit passed: the limit, the pages not read, and whether the
+    header was read."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"deadline_exceeded"})
+    seconds: float
+    unread: tuple[int, ...]
+    header_read: bool
+
+
+# --------------------------------------------------------------------------- #
+# A photo or a page of a scan, measured before it is read (pipeline._photo_issue,
+# _scan_issue, _too_large_issue)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Measured:
+    """A number measured on the image, and the limit it was held against."""
+
+    codes: ClassVar[frozenset[str]] = frozenset(
+        {"photo_blurred", "photo_dark", "photo_text_small", "scan_blurred", "scan_dark"}
+    )
+    value: float
+    limit: float
+
+
+@dataclass(frozen=True, slots=True)
+class FrameSide:
+    """The side of the photo the sheet or its text runs into, when known."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"photo_text_at_edge", "photo_sheet_cut"})
+    side: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Glare:
+    """The share of the sheet covered by glare, from 0 to 1."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"photo_glare"})
+    share: float
+
+
+@dataclass(frozen=True, slots=True)
+class TooLarge:
+    """A page whose images have more pixels together than may be opened."""
+
+    codes: ClassVar[frozenset[str]] = frozenset({"scan_too_large"})
+    pixels: int
+    limit: int
+
+
 type IssueValues = (
     SubtotalOff
     | TotalOff
@@ -161,6 +269,16 @@ type IssueValues = (
     | HeaderNotPrinted
     | PageCoverage
     | DocumentCoverage
+    | CutByDeadline
+    | RowsDropped
+    | AttemptCounts
+    | LayoutRow
+    | RowsCompared
+    | DeadlineStop
+    | Measured
+    | FrameSide
+    | Glare
+    | TooLarge
 )
 
 # Which of a check's sentences that name no value an issue is; only for a check that has
@@ -171,4 +289,8 @@ type IssueForm = Literal[
     "totals_missing",  # doc_sums: a total of the header was not read (which: the fields)
     "amounts_missing",  # doc_sums: some lines have no amount
     "unusable",  # line_math: a value of the line is missing or not a number
+    "failed",  # page_read: the answer was broken, every request failed, or reading broke
+    "not_read",  # page_read: the time limit passed before anything of the page was read
+    "deadline",  # layout_unverified: the control reading was stopped by the time limit
+    "no_rows",  # layout_unverified: the control reading returned no rows
 ]

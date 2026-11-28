@@ -12,18 +12,28 @@ from typing import assert_never
 
 from invoice_recognition.recognition.checks import Issue, ranges
 from invoice_recognition.recognition.issue_values import (
+    AttemptCounts,
     ControlTotalOff,
+    CutByDeadline,
+    DeadlineStop,
     DocumentCoverage,
+    FrameSide,
+    Glare,
     HeaderNotPrinted,
     IssueForm,
+    LayoutRow,
     LineProduct,
+    Measured,
     MissingNumbers,
     PageCoverage,
     RepeatedNumbers,
+    RowsCompared,
+    RowsDropped,
     SubtotalOff,
     TaxNoRow,
     TaxRateOff,
     TaxTotalOff,
+    TooLarge,
     TotalOff,
 )
 from invoice_recognition.shapes import Line
@@ -210,6 +220,20 @@ type Parsed = Callable[[Issue, Line | None], str | None]
 # "1E+2", "120.5".
 
 
+def _limit(x: float) -> str:
+    """A limit: of a measure ("140", "2.5") or of the time allowed ("240", "1e+06")."""
+    return f"{x:g}"
+
+
+def _pixels(n: int) -> str:
+    return f"{n:,}"
+
+
+def _share(x: float) -> str:
+    """A share from 0 to 1 as a percentage, without the sign: 0.034 -> "3.4"."""
+    return f"{x * 100:.1f}"
+
+
 def _numbers(numbers: tuple[int, ...]) -> str:
     """(2, 3, 5) -> "2, 3 and 5"."""
     return _and([str(n) for n in numbers])
@@ -251,11 +275,6 @@ def _rules(*rules: tuple[str, Callable[[re.Match[str], Issue, Line | None], str]
         return None
 
     return word
-
-
-def _always(text: Callable[[Issue], str]) -> Parsed:
-    """A wording that does not need the flow's message."""
-    return lambda issue, line: text(issue)
 
 
 _NUMBER = r"(-?[\d.]+(?:E[+-]?\d+)?)"
@@ -439,52 +458,13 @@ def _document_coverage(v: DocumentCoverage) -> str:
     )
 
 
-def _dropped(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    n = int(m.group(1))
-    if n == 1:
-        return (
-            f"1 row read from {_page(issue)} had neither an item code nor an amount and was "
-            "left out. If it is a line item, it is missing: check the page."
-        )
-    return (
-        f"{n} rows read from {_page(issue)} had neither an item code nor an amount and were "
-        "left out. If any of them is a line item, it is missing: check the page."
-    )
+# A page read by the model.
 
 
-def _disagree(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    counts = m.group(1).split(" and ")
-    return (
-        f"{_page(issue).capitalize()} was read {_times(len(counts))}, and the readings found "
-        f"different numbers of line items ({_and(counts)}). A line may be missing or read "
-        "twice: check the page."
-    )
-
-
-def _times(n: int) -> str:
-    return "twice" if n == 2 else f"{n} times"
-
-
-def _not_read(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    return (
-        f"Page {m.group(1)} was not read: reading the document took longer than allowed. "
-        "Its line items are missing; upload the document again to read it in full."
-    )
-
-
-def _not_read_to_the_end(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    page, n = m.group(1), int(m.group(2))
-    items = _plural(n, "line item", "line items")
-    return (
-        f"Page {page} was not read to the end: reading the document took longer than allowed. "
-        f"The {n} {items} read from it may be incomplete: check the page."
-    )
-
-
-def _page_failed(issue: Issue) -> str:
-    # The flow's message here is an error (a request that failed, an answer cut short or
-    # not valid JSON). Line items may still have been saved from a broken answer, or found
-    # in the PDF's text by code, so the text does not claim they are missing.
+def _page_failed(issue: Issue, line: Line | None) -> str:
+    # Whatever broke (a request that failed, an answer cut short or not valid JSON, an
+    # error while reading): line items may still have been saved from a broken answer, or
+    # found in the PDF's text by code, so the text does not claim they are missing.
     return (
         f"{_page(issue).capitalize()} could not be read in full: the model's answer was "
         "broken or every request failed. Line items from this page may be missing: check "
@@ -492,140 +472,212 @@ def _page_failed(issue: Issue) -> str:
     )
 
 
-def _row(kind: str) -> Callable[[re.Match[str], Issue, Line | None], str]:
-    def text(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-        row = m.group(1)
-        if kind == "stray_words":
+def _not_read(issue: Issue, line: Line | None) -> str:
+    return (
+        f"{_page(issue).capitalize()} was not read: reading the document took longer than "
+        "allowed. Its line items are missing; upload the document again to read it in full."
+    )
+
+
+def _page_empty(issue: Issue, line: Line | None) -> str:
+    return (
+        f"No line items were read from {_page(issue)}. If the page has line items, they are "
+        "missing: check it."
+    )
+
+
+def _cut_by_deadline(issue: Issue, v: CutByDeadline) -> str:
+    items = _plural(v.lines, "line item", "line items")
+    return (
+        f"{_page(issue).capitalize()} was not read to the end: reading the document took "
+        f"longer than allowed. The {v.lines} {items} read from it may be incomplete: check "
+        "the page."
+    )
+
+
+def _dropped(issue: Issue, v: RowsDropped) -> str:
+    if v.rows == 1:
+        return (
+            f"1 row read from {_page(issue)} had neither an item code nor an amount and was "
+            "left out. If it is a line item, it is missing: check the page."
+        )
+    return (
+        f"{v.rows} rows read from {_page(issue)} had neither an item code nor an amount and "
+        "were left out. If any of them is a line item, it is missing: check the page."
+    )
+
+
+def _disagree(issue: Issue, v: AttemptCounts) -> str:
+    return (
+        f"{_page(issue).capitalize()} was read {_times(len(v.counts))}, and the readings found "
+        f"different numbers of line items ({_numbers(v.counts)}). A line may be missing or "
+        "read twice: check the page."
+    )
+
+
+def _times(n: int) -> str:
+    return "twice" if n == 2 else f"{n} times"
+
+
+# A PDF whose rows were taken from its text by code.
+
+
+def _layout_row(issue: Issue, v: LayoutRow) -> str:
+    match v.kind:
+        case "stray_words":
             what = (
                 "the row of a line item also holds words outside the table's columns: "
-                f'"{row}". Check that this line was read in full.'
+                f'"{v.row}". Check that this line was read in full.'
             )
-        elif kind == "no_tax_rate":
+        case "no_tax_rate":
             what = (
-                f'no tax rate was found in the row "{row}", though the table has a tax rate '
+                f'no tax rate was found in the row "{v.row}", though the table has a tax rate '
                 "column. Check the tax rate of this line."
             )
-        else:
+        case "text_under_item":
             what = (
-                f'the text "{row}" under a line item was not added to it. Check whether it '
+                f'the text "{v.row}" under a line item was not added to it. Check whether it '
                 "belongs to the description of that line."
             )
-        said = _on_page(issue) + what
-        return said[0].upper() + said[1:]
-
-    return text
-
-
-def _crossed(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    page, _, compared, crossed = m.groups()
-    return (
-        f"On page {page}, the line items taken from the text of the PDF and those read by the "
-        f"model disagree: quantity and unit price look swapped ({crossed} of {compared} lines). "
-        "The model's reading of every page was used instead: check the quantities and unit "
-        "prices."
-    )
+        case _:
+            assert_never(v.kind)
+    said = _on_page(issue) + what
+    return said[0].upper() + said[1:]
 
 
-def _differ(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    page, same, compared, _ = m.groups()
-    return (
-        f"On page {page}, the line items taken from the text of the PDF and those read by the "
-        f"model differ (only {same} of {compared} lines agree). The model's reading of every "
-        "page was used instead: check the line items."
-    )
+def _rows_compared(issue: Issue, v: RowsCompared) -> str:
+    match issue.check:
+        case "layout_swapped":
+            return (
+                f"On {_page(issue)}, the line items taken from the text of the PDF and those "
+                "read by the model disagree: quantity and unit price look swapped "
+                f"({v.crossed} of {v.compared} lines). The model's reading of every page was "
+                "used instead: check the quantities and unit prices."
+            )
+        case "layout_mismatch":
+            return (
+                f"On {_page(issue)}, the line items taken from the text of the PDF and those "
+                f"read by the model differ (only {v.same} of {v.compared} lines agree). The "
+                "model's reading of every page was used instead: check the line items."
+            )
+    raise ValueError(f"rows compared for {issue.check}")
 
 
-def _unconfirmed(why: str) -> Callable[[re.Match[str], Issue, Line | None], str]:
-    def text(m: re.Match[str], issue: Issue, line: Line | None) -> str:
+def _unconfirmed(why: str) -> Wording:
+    def text(issue: Issue, line: Line | None) -> str:
         return (
             f"The line items were taken from the text of the PDF, but the control reading of "
-            f"page {m.group(1)} {why}, so nothing confirms which column is the quantity and "
+            f"{_page(issue)} {why}, so nothing confirms which column is the quantity and "
             "which the unit price. Check that they are not swapped."
         )
 
     return text
 
 
-def _deadline(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    seconds, rest = m.groups()
-    rest = rest.replace(
-        "Every page was read; a repeated read of a page or of the header was stopped.",
-        "Every page was read; only a second reading of a page or of the header was cut short.",
-    )
-    return f"Reading was stopped after {seconds} seconds, the time allowed for one document. {rest}"
+# The document as a whole.
 
 
-def _blurred_photo(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    value, limit = m.group(1), m.group(2)
-    if issue.severity == "error":
-        return (
-            f"The photo is too blurred to read: its sharpness is {value}, and at least {limit} "
-            "is needed. Nothing was read; please take the photo again, holding the phone still."
+def _deadline(v: DeadlineStop) -> str:
+    text = [
+        (
+            f"Reading was stopped after {_limit(v.seconds)} seconds, the time allowed for one "
+            "document."
         )
-    return (
-        f"The photo is not quite sharp (sharpness {value}; {limit} or more is safe). Amounts "
-        "are usually read correctly, but item codes may be misread: check them."
-    )
-
-
-def _edge(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    side = f"the {m.group(1)} edge" if m.group(1) else "an edge"
-    if issue.severity == "error":
-        return (
-            f"Text runs into {side} of the photo: part of the invoice is cut off. Nothing was "
-            "read; please take the photo again with the whole sheet in the frame."
+    ]
+    if len(v.unread) == 1:
+        text.append(f"Page {v.unread[0]} was not read.")
+    elif v.unread:
+        text.append(f"Pages {ranges(v.unread)} were not read.")
+    if not v.header_read:
+        text.append("The header (supplier, invoice number, totals) was not read.")
+    if not v.unread and v.header_read:
+        text.append(
+            "Every page was read; only a second reading of a page or of the header was cut short."
         )
+    return " ".join(text)
+
+
+# A photo, or a page of a scan, measured before it is read.
+
+
+def _measured(issue: Issue, v: Measured) -> str:
+    limit = _limit(v.limit)
+    # Only sharpness stops a page or a photo; the other measures are warnings, and their
+    # sentences say that values were read. Raised as an error, they have no sentence.
+    error = issue.severity == "error"
+    match issue.check:
+        case "photo_blurred" if error:
+            return (
+                f"The photo is too blurred to read: its sharpness is {v.value}, and at least "
+                f"{limit} is needed. Nothing was read; please take the photo again, holding "
+                "the phone still."
+            )
+        case "photo_blurred":
+            return (
+                f"The photo is not quite sharp (sharpness {v.value}; {limit} or more is safe). "
+                "Amounts are usually read correctly, but item codes may be misread: check them."
+            )
+        case "scan_blurred" if error:
+            return (
+                f"{_page(issue).capitalize()} is too blurred to read (sharpness {v.value}; at "
+                f"least {limit} is needed), so it was not read. Scan it again at a higher "
+                "resolution."
+            )
+        case "scan_blurred":
+            return (
+                f"{_page(issue).capitalize()} is not quite sharp (sharpness {v.value}; {limit} or "
+                "more is safe). Values read from it may contain errors: check them."
+            )
+        case "photo_dark" | "scan_dark" if not error:
+            what = "The photo" if issue.check == "photo_dark" else _page(issue).capitalize()
+            return (
+                f"{what} is dark (the paper's brightness is {v.value} of 255; below {limit} "
+                "counts as dark). Values read from it may contain errors: check them."
+            )
+        case "photo_text_small" if not error:
+            return (
+                f"The text is small in the photo (its lines are {v.value} pixels tall; {limit} or "
+                "more is safe). Values may be misread: check them, or take the photo again "
+                "from closer."
+            )
+    raise ValueError(f"a measure for {issue.check} ({issue.severity})")
+
+
+def _frame_side(issue: Issue, v: FrameSide) -> str:
+    side = f"the {v.side} edge" if v.side else "an edge"
+    match issue.check:
+        case "photo_text_at_edge" if issue.severity == "error":
+            return (
+                f"Text runs into {side} of the photo: part of the invoice is cut off. Nothing "
+                "was read; please take the photo again with the whole sheet in the frame."
+            )
+        case "photo_text_at_edge":
+            return (
+                f"Text comes close to {side} of the photo: part of the invoice may be cut off. "
+                "Check that no line or total is missing."
+            )
+        case "photo_sheet_cut" if issue.severity != "error":
+            return (
+                f"The sheet runs out of the photo past {side}. No text is near that edge, but "
+                "check that nothing of the invoice is missing."
+            )
+    raise ValueError(f"a side of the frame for {issue.check} ({issue.severity})")
+
+
+def _glare(issue: Issue, v: Glare) -> str:
+    if issue.severity == "error":  # a warning only: its sentence says values were read
+        raise ValueError("glare raised as an error")
     return (
-        f"Text comes close to {side} of the photo: part of the invoice may be cut off. Check "
-        "that no line or total is missing."
+        f"Glare covers {_share(v.share)}% of the sheet, so some text may be washed out. Check "
+        "the values in the bright part of the photo."
     )
 
 
-def _sheet_cut(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    side = f"the {m.group(1)} edge" if m.group(1) else "an edge"
+def _too_large(issue: Issue, v: TooLarge) -> str:
     return (
-        f"The sheet runs out of the photo past {side}. No text is near that edge, but check "
-        "that nothing of the invoice is missing."
-    )
-
-
-def _dark(what: Callable[[Issue], str]) -> Callable[[re.Match[str], Issue, Line | None], str]:
-    def text(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-        value, limit = m.groups()
-        return (
-            f"{what(issue)} is dark (the paper's brightness is {value} of 255; below {limit} "
-            "counts as dark). Values read from it may contain errors: check them."
-        )
-
-    return text
-
-
-def _glare(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    return (
-        f"Glare covers {m.group(1)}% of the sheet, so some text may be washed out. Check the "
-        "values in the bright part of the photo."
-    )
-
-
-def _small(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    value, limit = m.groups()
-    return (
-        f"The text is small in the photo (its lines are {value} pixels tall; {limit} or more is "
-        "safe). Values may be misread: check them, or take the photo again from closer."
-    )
-
-
-def _blurred_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
-    value, limit = m.group(1), m.group(2)
-    page = _page(issue).capitalize()
-    if issue.severity == "error":
-        return (
-            f"{page} is too blurred to read (sharpness {value}; at least {limit} is needed), so "
-            "it was not read. Scan it again at a higher resolution."
-        )
-    return (
-        f"{page} is not quite sharp (sharpness {value}; {limit} or more is safe). Values read "
-        "from it may contain errors: check them."
+        f"{_page(issue).capitalize()} holds an image too large to open ({_pixels(v.pixels)} "
+        f"pixels; at most {_pixels(v.limit)} can be opened), so it was not read. Save the scan "
+        "at a lower resolution and upload it again."
     )
 
 
@@ -666,72 +718,6 @@ def _read_twice_page(m: re.Match[str], issue: Issue, line: Line | None) -> str:
 # Transitional: the codes not yet given values, worded from the flow's message. A code
 # leaves this table in the commit that gives its issues values.
 ISSUE_TEXTS: dict[str, Parsed] = {
-    # A page.
-    "page_read": _rules(
-        (r"Page (\d+) was not read: the time limit for the document passed\.", _not_read),
-        (
-            (
-                r"Page (\d+) was not read to the end: the time limit for the document passed\. "
-                r"The (\d+) line items? read before that may be incomplete\."
-            ),
-            _not_read_to_the_end,
-        ),
-        (r"(?s:.*)", lambda m, i, line: _page_failed(i)),
-    ),
-    "page_empty": _always(
-        lambda i: (
-            f"No line items were read from {_page(i)}. If the page has line items, they "
-            "are missing: check it."
-        )
-    ),
-    "rows_dropped": _rules(
-        (r"(\d+) row\(s\) of the answer have neither sku nor amount and were left out", _dropped)
-    ),
-    "attempts_disagree": _rules(
-        (r"attempts returned different numbers of lines: (\d+(?: and \d+)+)", _disagree)
-    ),
-    # A PDF whose rows were taken from its text by code.
-    "layout_row": _rules(
-        (r"stray_words: (.*)", _row("stray_words")),
-        (r"no_tax_rate: (.*)", _row("no_tax_rate")),
-        (r"text_under_item: (.*)", _row("text_under_item")),
-    ),
-    "layout_swapped": _rules(
-        (
-            (
-                r"rows found by code and rows read by the model disagree on page (\d+): quantity "
-                r"and unit price are crossed \((\d+) of (\d+) agree, (\d+) crossed\); the document "
-                r"was read page by page by the model"
-            ),
-            _crossed,
-        ),
-    ),
-    "layout_mismatch": _rules(
-        (
-            (
-                r"rows found by code and rows read by the model disagree on page (\d+): the rows "
-                r"differ \((\d+) of (\d+) agree, (\d+) crossed\); the document was read page by "
-                r"page by the model"
-            ),
-            _differ,
-        ),
-    ),
-    "layout_unverified": _rules(
-        (
-            (
-                r"the check read of page (\d+) was stopped by the time limit for the document, so "
-                r"the rows found by code were not confirmed"
-            ),
-            _unconfirmed("was stopped by the time limit"),
-        ),
-        (
-            (
-                r"the model returned no rows for page (\d+), so nothing confirms which column is "
-                r"quantity and which is unit price"
-            ),
-            _unconfirmed("returned no line items"),
-        ),
-    ),
     # A page of a scan read a second time, by another model (second_reading.py).
     "second_reading": _rules(
         (
@@ -770,72 +756,13 @@ ISSUE_TEXTS: dict[str, Parsed] = {
             ),
         ),
     ),
-    # The document as a whole.
-    "unreadable_file": _always(lambda i: JOB_ERRORS["unreadable_file"]),
-    "deadline_exceeded": _rules(
-        (r"Reading stopped at the time limit of ([\d.]+) s for one document\. (.*)", _deadline)
-    ),
-    # A photo, measured before it is read.
-    "photo_blurred": _rules((r"Text sharpness (\S+) is below (\S+)\..*", _blurred_photo)),
-    "photo_no_text": _always(
-        lambda i: (
-            "No text was found in the photo, so nothing was read. Check that the photo "
-            "shows the invoice and is close enough to read."
-        )
-    ),
-    "photo_text_at_edge": _rules(
-        (r"Text reaches the edge of the frame(?: \((\w+) side\))?, .*", _edge)
-    ),
-    "photo_sheet_cut": _rules(
-        (
-            r"The sheet runs out of the frame(?: \((\w+) side\))?; no text is near that edge\.",
-            _sheet_cut,
-        )
-    ),
-    "photo_sheet_edge_unseen": _always(
-        lambda i: (
-            "No edge of the sheet is visible in the photo, so nothing confirms that the "
-            "whole invoice is in it. Check that no line or total is cut off."
-        )
-    ),
-    "photo_dark": _rules(
-        (r"Paper brightness (\S+) of 255 is below (\S+)\.", _dark(lambda i: "The photo"))
-    ),
-    "photo_glare": _rules((r"Glare covers ([\d.]+)% of the sheet\.", _glare)),
-    "photo_text_small": _rules((r"Text lines are (\S+) px tall, below (\S+)\.", _small)),
-    # A page of a scan, measured before it is read.
-    "scan_blurred": _rules((r"Text sharpness (\S+) of the page is below (\S+)\..*", _blurred_page)),
-    "scan_dark": _rules(
-        (
-            r"Paper brightness (\S+) of 255 is below (\S+)\.",
-            _dark(lambda i: _page(i).capitalize()),
-        )
-    ),
-    "scan_too_large": _rules(
-        (
-            (
-                r"The images of the page have ([\d,]+) pixels, more than the ([\d,]+) that may be "
-                r"opened\. The page was not sent to the model\."
-            ),
-            lambda m, i, line: (
-                f"{_page(i).capitalize()} holds an image too large to open "
-                f"({m[1]} pixels; at most {m[2]} can be opened), so it was not read. Save the scan "
-                "at a lower resolution and upload it again."
-            ),
-        ),
-    ),
-    "scan_no_text": _always(
-        lambda i: (
-            "No page of the scan has any text, so nothing was read. Check that this is "
-            "the right file."
-        )
-    ),
 }
 
 
 # The sentences that name no value, by (code, form). A check with several sentences has a
 # form for each of them and no (code, None) key: an issue of it that has neither values
-# nor a form has no sentence and keeps the flow's text.
+# nor a form has no sentence and keeps the flow's text. So does, on purpose, a reason of
+# quality.py that has no sentence here (photo_<code>, scan_<code>; none is raised today).
 _PLAIN: dict[tuple[str, IssueForm | None], Wording] = {
     ("doc_sums", "supplier"): lambda i, line: (
         "The supplier's name was not read. Check who issued the invoice."
@@ -856,6 +783,23 @@ _PLAIN: dict[tuple[str, IssueForm | None], Wording] = {
     ("grounding_row", None): lambda i, line: (
         "Each value of this line is printed on the page, but not together in one row: the "
         "line may mix values from different rows. Check it on the invoice."
+    ),
+    ("page_read", "failed"): _page_failed,
+    ("page_read", "not_read"): _not_read,
+    ("page_empty", None): _page_empty,
+    ("layout_unverified", "deadline"): _unconfirmed("was stopped by the time limit"),
+    ("layout_unverified", "no_rows"): _unconfirmed("returned no line items"),
+    ("unreadable_file", None): lambda i, line: JOB_ERRORS["unreadable_file"],
+    ("photo_no_text", None): lambda i, line: (
+        "No text was found in the photo, so nothing was read. Check that the photo shows the "
+        "invoice and is close enough to read."
+    ),
+    ("photo_sheet_edge_unseen", None): lambda i, line: (
+        "No edge of the sheet is visible in the photo, so nothing confirms that the whole "
+        "invoice is in it. Check that no line or total is cut off."
+    ),
+    ("scan_no_text", None): lambda i, line: (
+        "No page of the scan has any text, so nothing was read. Check that this is the right file."
     ),
 }
 
@@ -893,6 +837,26 @@ def _worded(issue: Issue, line: Line | None) -> str:
             return _page_coverage(issue, values)
         case DocumentCoverage():
             return _document_coverage(values)
+        case CutByDeadline():
+            return _cut_by_deadline(issue, values)
+        case RowsDropped():
+            return _dropped(issue, values)
+        case AttemptCounts():
+            return _disagree(issue, values)
+        case LayoutRow():
+            return _layout_row(issue, values)
+        case RowsCompared():
+            return _rows_compared(issue, values)
+        case DeadlineStop():
+            return _deadline(values)
+        case Measured():
+            return _measured(issue, values)
+        case FrameSide():
+            return _frame_side(issue, values)
+        case Glare():
+            return _glare(issue, values)
+        case TooLarge():
+            return _too_large(issue, values)
         case _:
             assert_never(values)
 

@@ -24,7 +24,13 @@ from invoice_recognition.recognition import quality as ql
 from invoice_recognition.recognition import second_reading as sr
 from invoice_recognition.recognition.checks import Issue
 from invoice_recognition.recognition.config import Config
-from invoice_recognition.recognition.issue_values import HeaderNotPrinted, IssueValues, SubtotalOff
+from invoice_recognition.recognition.issue_values import (
+    HeaderNotPrinted,
+    IssueValues,
+    LayoutRow,
+    LayoutRowKind,
+    SubtotalOff,
+)
 from invoice_recognition.recognition.results import Result
 from invoice_recognition.shapes import Doc, JSONObject, Line
 
@@ -43,6 +49,13 @@ RECOGNITION = Path(pl.__file__).parent
 def _calls(tree: ast.AST, name: str) -> Iterator[ast.Call]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name:
+            yield node
+
+
+def _calls_of(tree: ast.AST, method: str) -> Iterator[ast.Call]:
+    """Calls of a method by its dotted name: "notes.append"."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == method:
             yield node
 
 
@@ -583,17 +596,17 @@ def test_a_page_found_by_code_whose_checks_broke(monkeypatch: pytest.MonkeyPatch
 
 
 def test_pages_cut_by_the_deadline() -> None:
-    unread = Issue("page_read", pl.deadline_unread_text(3, 0), page=3)
+    unread = pl.deadline_unread_issue(3, 0)
     assert text(unread) == (
         "Page 3 was not read: reading the document took longer than allowed. Its line items "
         "are missing; upload the document again to read it in full."
     )
-    cut = Issue("page_read", pl.deadline_unread_text(3, 1), page=3)
+    cut = pl.deadline_unread_issue(3, 1)
     assert text(cut) == (
         "Page 3 was not read to the end: reading the document took longer than allowed. The "
         "1 line item read from it may be incomplete: check the page."
     )
-    many = Issue("page_read", pl.deadline_unread_text(3, 4), page=3)
+    many = pl.deadline_unread_issue(3, 4)
     assert "The 4 line items read from it may be incomplete" in text(many)
 
 
@@ -644,15 +657,13 @@ def test_pages_cut_by_the_deadline() -> None:
     ],
 )
 def test_the_deadline(unread: list[int], header_read: bool, worded: str) -> None:
-    issue = Issue("deadline_exceeded", pl.deadline_text(240.0, unread, header_read))
-    assert text(issue) == worded
+    assert text(pl.deadline_issue(240.0, unread, header_read)) == worded
 
 
 def test_a_deadline_of_a_million_seconds() -> None:
-    issue = Issue("deadline_exceeded", pl.deadline_text(1e6, [2], True))
-    # A known gap: the pattern does not take the exponent of "1e+06".
-    assert leaked(issue) == (
-        "Reading stopped at the time limit of 1e+06 s for one document. Page 2 was not read."
+    assert text(pl.deadline_issue(1e6, [2], True)) == (
+        "Reading was stopped after 1e+06 seconds, the time allowed for one document. Page 2 "
+        "was not read."
     )
 
 
@@ -744,6 +755,39 @@ def test_rows_the_layout_could_not_place(kind: str, worded: str) -> None:
     parsed = lay.Parsed([], [], [{"page": 1, "row": 3, "kind": kind, "text": row}])
     pages, _ = pl.layout_pages(parsed, 1, ev.build([PAGE], "text_layer"))
     assert text(one(pages[1].issues, "layout_row")) == worded
+
+
+def test_every_kind_of_row_the_parser_notes_has_a_sentence_or_is_harmless() -> None:
+    # Every note layout.py makes: notes.append({..., "kind": "<kind>", ...}).
+    kinds = set()
+    for call in _calls_of(ast.parse(inspect.getsource(lay)), "notes.append"):
+        [note] = call.args
+        assert isinstance(note, ast.Dict), ast.unparse(call)
+        named = dict(zip(note.keys, note.values, strict=True))
+        [kind] = [v for k, v in named.items() if isinstance(k, ast.Constant) and k.value == "kind"]
+        assert isinstance(kind, ast.Constant), ast.unparse(call)
+        kinds.add(kind.value)
+    assert set(pl.HARMLESS_NOTES) < kinds
+    assert kinds - set(pl.HARMLESS_NOTES) == set(get_args(LayoutRowKind))
+
+
+def layout_row(kind: str, row: str) -> Issue:
+    parsed = lay.Parsed([], [], [{"page": 1, "row": 3, "kind": kind, "text": row}])
+    pages, _ = pl.layout_pages(parsed, 1, ev.build([PAGE], "text_layer"))
+    return one(pages[1].issues, "layout_row")
+
+
+@pytest.mark.parametrize("row", HOSTILE, ids=["line-break", "surrogate", "long"])
+def test_a_row_is_quoted_as_printed(row: str) -> None:
+    assert text(layout_row("stray_words", row)) == (
+        "On page 1, the row of a line item also holds words outside the table's columns: "
+        f'"{row}". Check that this line was read in full.'
+    )
+
+
+def test_a_kind_of_row_without_a_sentence_keeps_the_flows_message() -> None:
+    issue = layout_row("a_new_kind", "x y")
+    assert messages.issue_text(issue) == "a_new_kind: x y"
 
 
 # --------------------------------------------------------------------------- #
@@ -987,6 +1031,26 @@ def test_scan_page(reason: ql.Reason, worded: str) -> None:
     assert text(pl._scan_issue(reason, 2, ql.ScanLimits())) == worded
 
 
+@pytest.mark.parametrize(
+    "issue",
+    [
+        pl._photo_issue(ql.Reason("sheet_cut", "", "reject", 0.2, "top"), LIMITS),
+        pl._photo_issue(ql.Reason("dark", "", "reject", 120.5), LIMITS),
+        pl._photo_issue(ql.Reason("glare", "", "reject", 0.034), LIMITS),
+        pl._photo_issue(ql.Reason("text_small", "", "reject", 9.5), LIMITS),
+        pl._scan_issue(ql.Reason("dark", "", "reject", 101.0), 2, ql.ScanLimits()),
+    ],
+    ids=["sheet_cut", "dark", "glare", "text_small", "scan-dark"],
+)
+def test_a_warning_raised_as_a_reject_keeps_the_flows_message(
+    issue: Issue, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Hand-built: quality.py raises these only as warnings, and their sentences say values
+    # were read; as a reject nothing was, so the person reads the flow's own words.
+    assert messages.issue_text(issue) == issue.message
+    assert "could not be worded" in caplog.text
+
+
 def test_the_photo_and_scan_texts_cover_every_reason_measured() -> None:
     photo = {f"photo_{c}" for c in _reason_codes("reasons", ("reject", "warn"))}
     scan = {f"scan_{c}" for c in _reason_codes("judge_page", ("reject", "warn"))}
@@ -1088,7 +1152,7 @@ def test_an_issue_with_values_is_never_read_from_its_message(
 
 def test_a_row_without_a_page_still_reads_as_a_sentence() -> None:
     # Hand-built: layout_pages always gives a row its page.
-    issue = Issue("layout_row", "stray_words: x y")
+    issue = Issue("layout_row", "stray_words: x y", values=LayoutRow("stray_words", "x y"))
     assert text(issue).startswith("The row of a line item also holds words")
 
 
@@ -1115,5 +1179,5 @@ def test_every_pattern_of_the_wording_table_is_pinned(request: pytest.FixtureReq
         patterns = _patterns(code)
         table |= {(code, None)} if patterns is None else {(code, k) for k in range(len(patterns))}
     # The patterns of the codes not yet given values, and the wordings that need none.
-    assert (len(table), sum(1 for _, k in table if k is None)) == (31, 5)
+    assert (len(table), sum(1 for _, k in table if k is None)) == (4, 0)
     assert table - _HIT == set()

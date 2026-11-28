@@ -227,6 +227,34 @@ def test_header_is_read_from_the_first_and_the_last_page() -> None:
     assert bodies[0]["messages"][0]["content"][0]["text"] == EXTRACT_HEADER
 
 
+@pytest.mark.parametrize(
+    "second",
+    [httpx.Response(500, text="boom"), "data: [DONE]\n\n", sse("{}")],
+    ids=["refused", "nothing", "empty"],
+)
+def test_a_second_header_attempt_that_fails_keeps_what_the_first_read(second: Answer) -> None:
+    """The first answer lacks the total, so the header is asked again; that answer fails
+    or is empty. What the first one read is kept, not thrown away."""
+    rows = [line(1)]
+    partial = header_for(rows) | {"total": None}
+    answers: list[Answer] = [partial, second]
+    server = Server(header_for(rows), {1: [rows]})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["messages"][0]["content"][0]["text"] != EXTRACT_HEADER:
+            return server(request)
+        answer = answers.pop(0)
+        if isinstance(answer, httpx.Response):
+            return answer
+        return httpx.Response(
+            200, text=answer if isinstance(answer, str) else sse(json.dumps(answer))
+        )
+
+    res = run(scan(1), "application/pdf", handler)
+    assert len(res.header_attempts) == 2
+    assert res.header == partial and res.status == "needs_review"
+
+
 def test_no_header_or_no_lines_fails_the_document() -> None:
     rows = [line(1)]
     no_header = run(scan(1), "application/pdf", Server("data: [DONE]\n\n", {1: [rows]}))

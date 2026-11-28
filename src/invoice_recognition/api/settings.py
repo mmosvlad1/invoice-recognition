@@ -10,7 +10,7 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_core import PydanticCustomError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from invoice_recognition.recognition.config import FAST, MAX_IMAGE_PIXELS
+from invoice_recognition.recognition.config import FAST, MAX_IMAGE_PIXELS, OTHER
 
 MIN_ACCESS_CODE = 16
 """The shortest access code accepted. `secrets.token_urlsafe(24)` gives 32 characters."""
@@ -74,6 +74,11 @@ class Settings(BaseSettings):
         default="",
         description="Reads every page of a scan a second time; a line item the two models "
         "read differently is flagged for a person. Empty (the default): off.",
+    )
+    fallback_model: str = Field(
+        default=OTHER,
+        description="Reads a request again when the provider of its model fails (an outage, "
+        "a timeout, an empty answer). Empty: off.",
     )
 
     @field_validator("openrouter_api_key")

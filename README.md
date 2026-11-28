@@ -7,7 +7,8 @@ LLM reads the document through [OpenRouter](https://openrouter.ai/); code then
 value on the page) instead of trusting it, and every doubt becomes an issue that names
 the fields and suggests values for a person to accept or keep. An upload is answered
 at once and read in the background. **Every uploaded document is sent to a third
-party**: OpenRouter and the provider of the model behind it.
+party**: OpenRouter and the provider of the model behind it (and, when that provider
+fails, a second one: see the backup model below).
 
 ![The review screen of the misprinted sample: the document on the left with three
 values framed in amber, the issues and their suggestions on the right](docs/screenshot.png)
@@ -98,6 +99,8 @@ misprinted sample takes longer because the page that fails its checks is read ag
   silently. A person accepts a suggestion or keeps the value as read.
 - **A second reading of scans** by another provider's model is optional and off by
   default (below).
+- **A backup model** of another provider reads a request again when the provider of
+  the model fails; on by default (below).
 
 Why this design (what was measured and rejected) is in the analysis, part 1 of the
 task, delivered separately.
@@ -122,6 +125,31 @@ alarms (1.15 %), just above the 1 % set as the limit before the run. Earlier, on
 synthetic scans, it showed 5 of 5 errors with 1 false alarm on 463 rows. It adds about
 40 % to the cost of reading a scan and a few seconds. With so few rows these rates are
 indicative only. Two models that misread a code the same way are not caught.
+
+### A backup model when the provider fails (on by default)
+
+When the provider of the model fails a request (HTTP 408, 429 or 5xx, an error in the
+stream, a timeout, a broken connection, an empty or cut-off answer), the same request is
+sent once to `FALLBACK_MODEL` (`openai/gpt-6-luna`), a model of another provider,
+through OpenRouter as well. OpenRouter already moves a request between the first
+model's own providers before an answer starts; this acts only when all of them fail, or
+after the answer has started. The backup's answer goes through the same checks; the
+result lists every request with its model, and a note says what the backup read. After
+the first such failure in a document, that document's later requests go straight to
+the backup, except the inputs it may not read (below), which stay with the first model;
+nothing is carried over to the next document. A request refused for our own reasons
+(any other 4xx), an answer the model got wrong and a request cut by the document's time
+limit are not sent again; a request to the backup is bounded by that limit like any
+other.
+
+On the measurements behind it, the backup read the same rows as the first model on
+table layouts, the check page of a digital PDF and clean scan pages, but on a blurred
+photo it returned wrong item codes with no other sign. So a photo or a scan page with a
+quality warning (blurred, dark, glare and the like) is never sent to it, and a photo
+whose line items it read gets a warning on the item codes. Its headers and the
+descriptions carried over a page break were checked once, on five test documents,
+without a mistake. A wrong `FALLBACK_MODEL` shows only during an outage (its requests
+then fail too). Empty switches it off.
 
 ## Costs and times
 
@@ -157,6 +185,7 @@ over the file.
 | `JOBS_KEPT` | 50 | documents kept in memory with their files; older finished ones are dropped (use fewer for a public instance, e.g. 20) |
 | `PAGE_MODEL`, `HEADER_MODEL`, `LAYOUT_MODEL` | `google/gemini-3.1-flash-lite` | the models, as OpenRouter names them |
 | `SECOND_READING_MODEL` | empty (off) | a second reader for scans, e.g. `openai/gpt-6-luna` |
+| `FALLBACK_MODEL` | `openai/gpt-6-luna` | reads a request again when the provider of the model fails; empty switches it off |
 | `HOST_PORT` | 8000 | read by Docker Compose, not by the app: the port on `127.0.0.1` the container is published on |
 
 ## The API
@@ -295,8 +324,8 @@ Every error is RFC 9457 problem details (`application/problem+json`) with a stab
   instead of `503`.
 - **Browsers:** built and checked in Chrome; Firefox and Safari not tried; Safari
   before 17.4 is not supported.
-- **Not built:** a fallback model when the provider fails (planned); persistence;
-  users or any authentication beyond one shared code; a rate limit.
+- **Not built:** persistence; users or any authentication beyond one shared code; a
+  rate limit.
 
 ## Running it in public
 
@@ -312,8 +341,11 @@ choice and responsibility. Before that:
 - **Everyone with the code sees every document**, and can download it; uploaded files
   stay in memory until the restart or until `JOBS_KEPT` newer ones push them out.
   The code keeps strangers out; it does not tell users apart.
-- **Files go to OpenRouter and the model's provider**, and to a second provider only
-  if `SECOND_READING_MODEL` is set.
+- **Files go to OpenRouter and the model's provider**, and to a second provider if
+  `SECOND_READING_MODEL` is set, or while the first provider fails (`FALLBACK_MODEL`,
+  on by default; empty switches it off). OpenRouter already moves a request between the
+  first model's own providers before an answer starts, so the backup is asked only when
+  all of them fail or after the answer has started.
 - **Use a dedicated provider key with a small credit limit.** Whoever holds the code
   can spend: roughly $20–60 an hour for someone uploading as fast as the app allows
   (computed, not measured). When the credit runs out, uploads should end as

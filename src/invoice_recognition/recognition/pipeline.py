@@ -901,10 +901,16 @@ def deadline_unread_text(page: int, lines: int) -> str:
     )
 
 
-def fallback_note(model: str, pages: list[int]) -> JSONObject:
+def fallback_note(model: str, pages: list[int], header: bool, layout: bool) -> JSONObject:
     """The one note for the readings the result keeps from the backup model, read because
-    the provider of the first model failed. pages: those whose line items it read."""
-    which = f"page {pages[0]}" if len(pages) == 1 else f"pages {page_ranges(pages)}"
+    the provider of the first model failed. pages: those whose line items it read; header,
+    layout: whether it read the header, and the layout of the table the rows were found
+    by."""
+    parts = ["the header"] if header else []
+    parts += ["the layout of the item table"] if layout else []
+    if pages:
+        parts.append(f"page {pages[0]}" if len(pages) == 1 else f"pages {page_ranges(pages)}")
+    which = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     return {
         "page": None,
         "kind": "fallback_model",
@@ -913,8 +919,8 @@ def fallback_note(model: str, pages: list[int]) -> JSONObject:
         "source": "fallback",
         "model": model,
         "pages": pages,
-        "header": False,
-        "layout": False,
+        "header": header,
+        "layout": layout,
     }
 
 
@@ -950,22 +956,45 @@ CROSSED_COLUMNS = ["line.quantity", "line.unit_price"]
 
 
 async def ask_layout(
-    client: httpx.AsyncClient, prompt: str, cfg: Config, *, gate: Gate | None = None
-) -> tuple[JSONObject | None, list[Attempt], str | None]:
-    """One text-only request. Returns (answer, attempts, why it cannot be used)."""
+    client: httpx.AsyncClient,
+    prompt: str,
+    cfg: Config,
+    *,
+    gate: Gate | None = None,
+    backup: Backup | None = None,
+) -> tuple[JSONObject | None, list[Attempt], str | None, bool]:
+    """One text-only request, and the same once to `backup` when the provider of the
+    layout model fails (_ask). Returns (answer, attempts, why it cannot be used, whether
+    the answer is the backup's): the first usable answer, else the last one's error."""
     if gate is None:
         gate = Gate()
     try:
-        res, _ = await _call(
-            client, cfg.layout_model, prompt, None, cfg.layout_max_tokens, 90, gate=gate
+        sent = await _ask(
+            client,
+            cfg.layout_model,
+            prompt,
+            None,
+            cfg.layout_max_tokens,
+            90,
+            gate=gate,
+            backup=backup,
         )
     except DeadlinePassed:
-        return None, [], "the overall deadline passed"
-    raw = None if res.error else parse_json(res.text)
-    error = res.error or (
-        None if raw is not None else f"answer is not valid JSON (finish={res.finish_reason})"
-    )
-    return raw, [_attempt(res, 0, 1 if error else 0)], error
+        return None, [], "the overall deadline passed", False
+    answer: JSONObject | None = None
+    attempts: list[Attempt] = []
+    error: str | None = None
+    by_backup = False
+    for req in sent:
+        res = req.res
+        raw = None if res.error else parse_json(res.text)
+        why = res.error or (
+            None if raw is not None else f"answer is not valid JSON (finish={res.finish_reason})"
+        )
+        attempts.append(_attempt(res, 0, 1 if why else 0))
+        if answer is None:
+            answer, error, by_backup = raw, why, req.backup and raw is not None
+    return answer, attempts, error, by_backup
 
 
 def layout_pages(
@@ -1491,14 +1520,26 @@ async def _frame_lines(
 
 
 async def read_header(
-    client: httpx.AsyncClient, part: ContentPart, cfg: Config, *, gate: Gate | None = None
-) -> tuple[Header, list[Attempt], bool]:
+    client: httpx.AsyncClient,
+    part: ContentPart,
+    cfg: Config,
+    *,
+    gate: Gate | None = None,
+    backup: Backup | None = None,
+) -> tuple[Header, list[Attempt], bool, bool]:
     """Read the header, a second time when the first answer lacks the total or the
-    supplier. Returns (header, attempts, whether an attempt ran to its end).
+    supplier. Returns (header, attempts, whether an attempt ran to its end, whether the
+    header kept is the backup's answer).
 
-    The header kept is the best one read: a later answer replaces it unless that answer
-    is empty, or failed (an error) while an earlier one gave something. So a second
-    attempt that fails never throws away what the first one read.
+    backup: where a request goes as well when the provider of the header model fails
+    (_ask); its answer is one more attempt, taken in order as any other. The header is
+    the backup's only when the answer kept is the backup's and it did not fail.
+
+    The header kept is the best one read: a later answer replaces it unless the header
+    is already whole (it has the total and the supplier), or that answer is empty, or
+    failed (an error) while an earlier one gave something. So an attempt that fails
+    never throws away what an earlier one read, and once the header is whole nothing
+    replaces it and no further attempt is sent.
 
     At the deadline the attempts stop. A cut attempt's answer is never used: a header
     cannot be salvaged from a part of it, as page rows can."""
@@ -1506,24 +1547,27 @@ async def read_header(
         gate = Gate()
     attempts: list[Attempt] = []
     header: Header = {}
-    answered = False
+    answered = by_backup = whole = False
     for _ in range(2):
         try:
-            res, cut = await _call(
-                client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate
+            sent = await _ask(
+                client, cfg.header_model, EXTRACT_HEADER, part, 4_000, 90, gate=gate, backup=backup
             )
         except DeadlinePassed:
             break
-        answer = parse_json(res.text) or {}
-        attempts.append(_attempt(res, 0, 0 if answer else 1))
-        if cut:
+        for req in sent:
+            answer = parse_json(req.res.text) or {}
+            attempts.append(_attempt(req.res, 0, 0 if answer else 1))
+            if req.cut:  # the last request sent: nothing follows a cut
+                break
+            answered = True
+            failed = req.res.error is not None
+            if answer and not whole and (not failed or not header):
+                header, by_backup = answer, req.backup and not failed
+                whole = header.get("total") is not None and bool(header.get("supplier_name"))
+        if whole or any(req.cut for req in sent):
             break
-        answered = True
-        if answer and (res.error is None or not header):
-            header = answer
-        if header.get("total") is not None and header.get("supplier_name"):
-            break
-    return header, attempts, answered
+    return header, attempts, answered, by_backup
 
 
 def page_ranges(pages: list[int]) -> str:
@@ -1905,6 +1949,7 @@ async def _read(
         return r
 
     layout_attempts: list[Attempt] = []
+    layout_by_backup = False  # the layout the rows were found by is the backup's answer
     layout_issues: list[Issue] = []
     notes: list[JSONObject] = list(scan_notes)
     read_by_code: tuple[lay.Parsed, lay.Layout] | None = None  # framed after reading
@@ -1913,14 +1958,16 @@ async def _read(
         # The second readings are tasks of their own, next to the pages: a page is settled
         # (and on_page called) without waiting for its second reading.
         reading = asyncio.gather(
-            read_header(client, header_part, cfg, gate=gate),
+            read_header(client, header_part, cfg, gate=gate, backup=backup),
             *(one(p) for p in range(1, n + 1)),
             *(second(p) for p in second_pages),
         )
         _starting(gate)
         first, *rest = await reading
         # gather() of awaitables of different types gives a list of their union.
-        header, header_attempts, header_read = cast(tuple[Header, list[Attempt], bool], first)
+        header, header_attempts, header_read, header_by_backup = cast(
+            tuple[Header, list[Attempt], bool, bool], first
+        )
         pages = cast(list[PageResult], rest[:n])
         seconds = cast(list[tuple[Attempt | None, list[Line] | None]], rest[n:])
     else:
@@ -1934,14 +1981,14 @@ async def _read(
             return await one(wp, announce=False, with_carry=False) if cfg.layout_witness else None
 
         beginning = asyncio.gather(
-            read_header(client, header_part, cfg, gate=gate),
-            ask_layout(client, lay.layout_request(text_pages, wp), cfg, gate=gate),
+            read_header(client, header_part, cfg, gate=gate, backup=backup),
+            ask_layout(client, lay.layout_request(text_pages, wp), cfg, gate=gate, backup=backup),
             witness(),
         )
         _starting(gate)
         (
-            (header, header_attempts, header_read),
-            (raw, layout_attempts, error),
+            (header, header_attempts, header_read, header_by_backup),
+            (raw, layout_attempts, error, layout_by_backup),
             seen,
         ) = await beginning
         by_code: dict[int, PageResult] | None = None
@@ -2073,8 +2120,10 @@ async def _read(
     if missing is not None:
         notes.append(missing)
     by_backup = [p.page for p in pages if p.method == "model" and p.by_backup]
-    if backup is not None and by_backup:
-        notes.append(fallback_note(backup.model, by_backup))
+    # The layout counts only when rows found by it are kept.
+    layout_by_backup = layout_by_backup and any(p.method == "layout" for p in pages)
+    if backup is not None and (by_backup or header_by_backup or layout_by_backup):
+        notes.append(fallback_note(backup.model, by_backup, header_by_backup, layout_by_backup))
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []

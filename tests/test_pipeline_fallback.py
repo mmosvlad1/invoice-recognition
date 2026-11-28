@@ -12,14 +12,16 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable, Coroutine, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from importlib.util import find_spec
 from typing import Any
 
 import httpx
 import pytest
+from test_golden import comparable, comparable_requests, compare
 
-from invoice_recognition.api.views import result_view
+from invoice_recognition.api.views import job_error, result_view
 from invoice_recognition.llm import PDF_NATIVE
 from invoice_recognition.recognition import pipeline as pl
 from invoice_recognition.recognition.config import FAST, OTHER, Config
@@ -29,7 +31,7 @@ from invoice_recognition.shapes import JSONObject
 
 from drawn import scan, scanned
 from fakes import Answer, Handler, SlowServer, header_for, kind_of, line, model_of, sse
-from golden_cases import result_of
+from golden_cases import CASES, GOLDEN, Case, Model, request_of, result_of, sha256
 from samples import saved_layout, truth_doc
 
 type Key = int | str
@@ -294,6 +296,40 @@ PAGE_KINDS = [
 ]
 
 
+def header_kept(res: Result) -> None:
+    assert [a.model for a in res.header_attempts] == [FAST, OTHER]
+    assert res.header and res.status == "ok"
+    [note] = fallback_notes(res)
+    assert (note["text"], note["pages"], note["header"], note["layout"]) == (
+        note_text("the header"),
+        [],
+        True,
+        False,
+    )
+
+
+def layout_kept(res: Result) -> None:
+    assert [a.model for a in res.layout_attempts] == [FAST, OTHER]
+    assert res.layout["status"] == "confirmed" and res.method == "layout"
+    [note] = fallback_notes(res)
+    assert (note["text"], note["pages"], note["header"], note["layout"]) == (
+        note_text("the layout of the item table"),
+        [],
+        False,
+        True,
+    )
+
+
+KINDS = [
+    *PAGE_KINDS,
+    replace(scan_kind(2, 1), name="the header of a scan", target="header", kept=header_kept),
+    Kind(
+        "the header of a PDF with a text layer", *digital("s_classic"), "header", kept=header_kept
+    ),
+    Kind("the layout of the item table", *digital("s_classic"), "layout", kept=layout_kept),
+]
+
+
 def read(
     kind: Kind,
     first_answer: Answer,
@@ -326,14 +362,14 @@ def check_no_fallback(kind: Kind, answer: Answer) -> None:
 
 
 @pytest.mark.parametrize("answer", TRIGGERS.values(), ids=TRIGGERS.keys())
-@pytest.mark.parametrize("kind", PAGE_KINDS, ids=[k.name for k in PAGE_KINDS])
-def test_a_page_whose_provider_failed_is_read_by_the_backup(kind: Kind, answer: Answer) -> None:
+@pytest.mark.parametrize("kind", KINDS, ids=[k.name for k in KINDS])
+def test_a_request_whose_provider_failed_goes_to_the_backup(kind: Kind, answer: Answer) -> None:
     check_fell_back(kind, *read(kind, answer))
 
 
 @pytest.mark.parametrize("answer", NON_TRIGGERS.values(), ids=NON_TRIGGERS.keys())
-@pytest.mark.parametrize("kind", PAGE_KINDS, ids=[k.name for k in PAGE_KINDS])
-def test_a_page_that_failed_for_any_other_reason_is_not(kind: Kind, answer: Answer) -> None:
+@pytest.mark.parametrize("kind", KINDS, ids=[k.name for k in KINDS])
+def test_a_request_that_failed_for_any_other_reason_does_not(kind: Kind, answer: Answer) -> None:
     check_no_fallback(kind, answer)
 
 
@@ -343,7 +379,7 @@ def whole_without_finish(kind: Kind) -> str:
     return events(content(json.dumps(payload)))
 
 
-@pytest.mark.parametrize("kind", PAGE_KINDS, ids=[k.name for k in PAGE_KINDS])
+@pytest.mark.parametrize("kind", KINDS, ids=[k.name for k in KINDS])
 def test_a_whole_answer_without_a_finish_reason_is_kept(kind: Kind) -> None:
     check_no_fallback(kind, whole_without_finish(kind))
 
@@ -506,6 +542,122 @@ def test_a_page_the_backup_answered_but_another_reading_won_is_not_named() -> No
     assert [a.model for a in pr.attempts] == [FAST, OTHER, "vendor/second"]
     assert (pr.model, pr.by_backup) == ("vendor/second", False)
     assert res.status == "ok" and fallback_notes(res) == []
+
+
+def test_a_header_from_the_backup_without_a_total_is_read_again() -> None:
+    """Each answer in turn, as before; the kept header is the best one read."""
+    kind = replace(scan_kind(1, 1), target="header")
+    good = kind.good["header"][0]
+    assert isinstance(good, dict)
+    res, first, backup = read(
+        kind, DOWN, backup_answers=kind.good | {"header": [good | {"total": None}, good]}
+    )
+    assert (first.calls["header"], backup.calls["header"]) == (1, 2)
+    assert [a.model for a in res.header_attempts] == [FAST, OTHER, OTHER]
+    assert res.header == good and res.status == "ok"
+
+
+def test_a_header_that_both_providers_fail_to_read_again_keeps_the_first_answer() -> None:
+    """The first answer lacks the total; the second iteration fails at the first model's
+    provider and at the backup's: the partial header read first is kept, not thrown away,
+    and nothing says the backup read it."""
+    kind = replace(scan_kind(1, 1), target="header")
+    good = kind.good["header"][0]
+    assert isinstance(good, dict)
+    partial = good | {"total": None}
+    first = Script(kind.good | {"header": [partial, DOWN]})
+    backup = Script(kind.good | {"header": [DOWN]})
+    res = run(scan(1), "application/pdf", wire(first, backup), on())
+    assert [a.model for a in res.header_attempts] == [FAST, FAST, OTHER]
+    assert res.header == partial and fallback_notes(res) == []
+
+
+def test_a_header_kept_from_a_backup_answer_that_failed_is_not_the_backups() -> None:
+    """The backup's stream broke after the whole header: kept, since nothing else was
+    read, but the backup's reading failed - no note says it read the header."""
+    kind = replace(scan_kind(1, 1), target="header")
+    good = kind.good["header"][0]
+    broken = events(content(json.dumps(good)), {"error": {"code": 502, "message": "gone"}})
+    res, _, _ = read(kind, DOWN, backup_answers=kind.good | {"header": [broken]})
+    assert res.header == good and [a.model for a in res.header_attempts] == [FAST, OTHER]
+    assert fallback_notes(res) == []
+
+
+def test_a_whole_header_is_kept_whatever_the_backup_answers_after_it() -> None:
+    """The first model's stream gives the whole header, then ends with its own error
+    marker: its provider failed, so the backup is asked too and answers a header without
+    the total. The whole header read first is kept and not asked again, and nothing says
+    the backup read it."""
+    kind = replace(scan_kind(1, 1), target="header")
+    good = kind.good["header"][0]
+    assert isinstance(good, dict)
+    marked = events(content(json.dumps(good), "error"))
+    res, first, backup = read(
+        kind, marked, backup_answers=kind.good | {"header": [good | {"total": None}]}
+    )
+    assert (first.calls["header"], backup.calls["header"]) == (1, 1)
+    assert [a.model for a in res.header_attempts] == [FAST, OTHER]
+    assert res.header == good and res.header["total"] is not None and res.status == "ok"
+    assert not any(n["header"] for n in fallback_notes(res))
+
+
+def test_a_layout_neither_model_can_give_fails_with_the_backups_reason() -> None:
+    kind = Kind("layout", *digital("s_classic"), "layout")
+    res, _, _ = read(kind, DOWN, backup_answers=kind.good | {"layout": [sse("{oops")]})
+    assert [a.model for a in res.layout_attempts] == [FAST, OTHER]
+    assert [a.issues for a in res.layout_attempts] == [1, 1]
+    assert res.layout["status"] == "failed"
+    assert res.layout["reason"] == "answer is not valid JSON (finish=stop)"
+    # The one page is the witness, read by the first model while the layout was asked.
+    assert res.method == "model" and fallback_notes(res) == []
+
+
+def test_a_layout_answer_the_backup_failed_to_give_is_not_the_backups() -> None:
+    """ask_layout itself: neither answer can be used, so the answer is no one's."""
+    backup_answer = httpx.Response(200, text=sse("{oops"))
+
+    async def go() -> tuple[JSONObject | None, str | None, bool]:
+        handler = route(lambda _: DOWN, lambda _: backup_answer)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backup = pl.Backup(OTHER, 24_000, 90.0)
+            answer, _, why, by_backup = await pl.ask_layout(client, "p", Config(), backup=backup)
+        return answer, why, by_backup
+
+    assert on_loop(go()) == (None, "answer is not valid JSON (finish=stop)", False)
+
+
+def test_one_note_names_everything_the_backup_read() -> None:
+    every = [line(p) for p in range(1, 6)]
+    good: dict[Key, list[Answer]] = {"header": [header_for(every)]}
+    good |= {p: [[line(p)]] for p in range(1, 6)}
+    first = Script(good | {"header": [DOWN], 2: [DOWN], 4: [DOWN], 5: [DOWN]})
+    backup = Script(good)
+    res = run(scan(5), "application/pdf", wire(first, backup), on())
+    [note] = fallback_notes(res)
+    assert note["text"] == note_text("the header and pages 2 and 4–5")
+    assert (note["pages"], note["header"]) == ([2, 4, 5], True)
+    assert res.notes[-1] is note
+
+
+def test_both_providers_down_bound_the_requests_and_claim_nothing() -> None:
+    """A three-page scan, both providers answering 503 at once: each request goes to the
+    first model once, then to the backup alone - the header and each page at most three
+    requests - and since the backup read nothing, no note says it did."""
+    good = scan_kind(3, 1).good
+    first, backup = Script({k: [DOWN] for k in good}), Script({k: [DOWN] for k in good})
+    res = run(scan(3), "application/pdf", wire(first, backup), on())
+    assert first.calls == Counter({"header": 1, 1: 1, 2: 1, 3: 1})
+    assert backup.calls == Counter({"header": 2, 1: 2, 2: 2, 3: 2})
+    assert res.status == "failed" and res.header == {} and fallback_notes(res) == []
+    error = job_error("pdf", res)
+    assert error is not None and error.code == "model_unavailable"
+
+
+def test_both_providers_down_ask_the_layout_twice() -> None:
+    kind = Kind("layout", *digital("s_classic"), "layout")
+    res, first, backup = read(kind, DOWN, backup_answers=kind.good | {"layout": [DOWN]})
+    assert (first.calls["layout"], backup.calls["layout"]) == (1, 1)
+    assert res.layout["status"] == "failed" and fallback_notes(res) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -823,6 +975,30 @@ def test_the_backup_takes_its_slot_before_any_waiting_second_reading() -> None:
     assert res.pages[1].by_backup
 
 
+def test_the_backup_waits_its_turn_among_first_readers_not_after_them() -> None:
+    """One shared slot. The header fails at its provider while the three pages (read by a
+    model of their own, which stays up) wait for the slot; each page is then read again.
+    The backup's header request queues as an ordinary request: after the pages already
+    waiting, before their retries."""
+    kind = scan_kind(3, 1)
+    answers = kind.good | {"header": [DOWN]}
+    answers |= {p: [[line(p, amount=99.0)], [line(p)]] for p in (1, 2, 3)}
+    first, other = Script(answers), Script(kind.good)
+    handler, arrived = arrivals(kind, first, other, 3)
+    res = read_with_one_slot(3, handler, on(page_models=("vendor/pages", "vendor/pages")))
+    assert arrived == [
+        "first header",
+        "first 1",
+        "first 2",
+        "first 3",
+        "backup header",
+        "first 1",
+        "first 2",
+        "first 3",
+    ]
+    assert res.status == "ok" and res.header_attempts[-1].model == OTHER
+
+
 # --------------------------------------------------------------------------- #
 # A hostile answer of the backup goes through the same parsing as the first model's
 # --------------------------------------------------------------------------- #
@@ -881,3 +1057,121 @@ def test_a_backup_that_is_the_first_model_sends_nothing_more() -> None:
     # Both are the page's own attempts, as without a backup: no backup request among them.
     assert {b["max_tokens"] for b in first.bodies if key_of(b) == 1} == {16_000}
     assert not res.pages[0].by_backup and fallback_notes(res) == []
+
+
+# --------------------------------------------------------------------------- #
+# The pinned scenarios: unchanged while the first provider answers
+# --------------------------------------------------------------------------- #
+
+HEALTHY = [c for c in CASES if c.name not in ("scan_failures", "layout_failed")]
+
+
+def golden_run(
+    case: Case, served: bool, backup: Handler, first: Model | None = None
+) -> tuple[Result, Model]:
+    """process() on a scenario with the backup on, its model as the first one."""
+    data, mime = case.data()
+    model = first or case.model()
+    model.models[OTHER] = backup
+    cfg = Config(**case.config, fallback_model=OTHER)
+
+    async def go() -> Result:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(model)) as client:
+            if not served:
+                return await pl.process(data, mime, client, cfg)
+            with ThreadPoolExecutor(1) as lane:
+                return await pl.process(
+                    data,
+                    mime,
+                    client,
+                    replace(cfg, deadline_s=240.0),
+                    lane=lane,
+                    request_slots=asyncio.Semaphore(24),
+                )
+
+    return on_loop(go()), model
+
+
+def golden(case: Case) -> JSONObject:
+    pinned: JSONObject = json.loads((GOLDEN / f"{case.name}.json").read_text())
+    return pinned
+
+
+@pytest.mark.parametrize("served", [False, True], ids=["plain", "served"])
+@pytest.mark.parametrize("case", HEALTHY, ids=[c.name for c in HEALTHY])
+def test_with_the_backup_on_a_scenario_is_read_as_pinned(case: Case, served: bool) -> None:
+    """No request of these scenarios fails at its provider: the backup is never asked, and
+    the result and every request are those of the golden file."""
+    asked = Script({})
+    res, model = golden_run(case, served, asked)
+    assert asked.bodies == []
+    pinned = golden(case)
+    data, _ = case.data()
+    exact = sha256(data) == pinned["input_sha256"]
+    differences = compare(comparable(result_of(res.to_json())), comparable(pinned["result"]))
+    sent = comparable_requests([request_of(b) for b in model.bodies], exact)
+    differences += compare(sent, comparable_requests(pinned["requests"], exact))
+    assert differences == []
+
+
+def shifted(case: Case) -> Model:
+    """The scenario's model answering each request with the answer its first model gave to
+    that request's next attempt in the golden file: the backup reads what it would have."""
+    model = case.model()
+    model.calls = Counter({k: 1 for k in [*model.pages, "header", "layout"]})
+    return model
+
+
+def what_a_person_checks(result: JSONObject) -> JSONObject:
+    keys = ("status", "header", "lines", "checkpoints", "issues", "notes")
+    out = {k: comparable(result)[k] for k in keys}
+    out["notes"] = [n for n in out["notes"] if n["kind"] != "fallback_model"]
+    for note in out["notes"]:
+        if note["kind"] == "stronger_model_not_called":  # it counts the reads
+            note.pop("text")
+    return out
+
+
+@pytest.mark.parametrize("served", [False, True], ids=["plain", "served"])
+@pytest.mark.parametrize("name", ["scan_failures", "layout_failed"])
+def test_with_the_backup_on_a_failed_provider_reads_what_the_golden_file_did(
+    name: str, served: bool
+) -> None:
+    """The first model fails here: its requests up to the failure are the golden file's,
+    every later one goes to the backup, and - with the backup answering what the first
+    model answered then - a person sees the same result, but the note."""
+    case = next(c for c in CASES if c.name == name)
+    backup = shifted(case)
+    res, model = golden_run(case, served, backup)
+    pinned = golden(case)
+    data, _ = case.data()
+    exact = sha256(data) == pinned["input_sha256"]
+    sent = comparable_requests([request_of(b) for b in model.bodies], exact)
+    expected = comparable_requests(pinned["requests"], exact)
+    assert compare(sent, expected[: len(sent)]) == []
+    assert len(sent) < len(expected)  # the first model was not asked everything
+    asked = comparable_requests([request_of(b) for b in backup.bodies], exact)
+    # Each backup request repeats one of the golden file's: the same prompt and file.
+    assert asked and all(r["model"] == OTHER for r in asked)
+    assert all(r["messages"] in [e["messages"] for e in expected] for r in asked)
+    seen = what_a_person_checks(result_of(res.to_json()))
+    assert compare(seen, what_a_person_checks(pinned["result"])) == []
+    assert [n["model"] for n in fallback_notes(res)] == [OTHER]
+
+
+def test_a_layout_the_backup_gives_keeps_the_rows_found_by_code() -> None:
+    case = next(c for c in CASES if c.name == "layout_failed")
+    _, _, header, pages = truth_doc("s_classic")
+    backup = Model([header], {p: [rows] for p, rows in pages.items()}, saved_layout("s_classic"))
+    res, _ = golden_run(case, False, backup)
+    assert res.layout["status"] == "confirmed" and res.method == "layout"
+    [note] = fallback_notes(res)
+    assert note["text"] == note_text("the layout of the item table")
+
+
+def test_switched_off_a_scenario_that_fails_never_asks_the_backup() -> None:
+    asked = Script({})
+    every: dict[Key, list[Answer]] = {k: [DOWN] for k in ("header", "layout", 1)}
+    model = Script(every)
+    res = run(*CASES[4].data(), route(model, asked), Config())
+    assert asked.bodies == [] and res.status == "failed"

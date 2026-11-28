@@ -53,6 +53,9 @@ class PageResult:
     # The model of the attempt whose lines are kept; None for a page found by code or not
     # read by the model. Not in Result.to_json().
     model: str | None = None
+    # The attempt whose lines are kept was sent to the backup model (Config.fallback_model)
+    # because the provider of the first one failed. Not in Result.to_json().
+    by_backup: bool = False
 
 
 @dataclass
@@ -98,6 +101,10 @@ class Result:
     #   pages of a scan that were to be read a second time by another model and were not
     #   compared with it (source: "second_reading"): second_reading_missing, "page" is
     #   None, + "pages"; one note for the document
+    #   readings kept from the backup model because the provider of the first one failed
+    #   (source: "fallback"): fallback_model, "page" is None, + "model", "pages" (the pages
+    #   whose line items it read), "header", "layout" (whether it read those); one note for
+    #   the document, after every other note
     notes: list[JSONObject] = field(default_factory=list)
     # {} when nothing was measured: a PDF with a text layer, a PDF none of whose pages
     # carries an image, or the check switched off (Config.photo_quality / scan_quality).

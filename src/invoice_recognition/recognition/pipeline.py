@@ -48,6 +48,15 @@ issue "second_reading" (a warning, with the other model's values as a suggestion
 lines stay those of the first reading. A second reading yields every shared request slot
 to the first readers (Gate.enter) and never counts against the deadline; one that cannot
 be used leaves one note and changes nothing else.
+
+A backup model of another provider, when Config.fallback_model names one: a request of a
+first reader whose provider fails (fallback.py: an outage, a timeout, nothing usable
+coming back) is sent once more, the same, to the backup (_ask), and its answer is one more
+attempt. From then on the document's requests for the failed model go to the backup
+alone - but a page of a scan with a quality warning, which is never sent to it and stays
+with the first model. What the result keeps from the backup (an answer of it that did
+not fail) is named in one note "fallback_model". With a first provider that answers,
+nothing changes: the same requests, in the same order, the same result.
 """
 
 import asyncio
@@ -78,6 +87,7 @@ from invoice_recognition.recognition import boxes as bx
 from invoice_recognition.recognition import carryover as co
 from invoice_recognition.recognition import checks, photo
 from invoice_recognition.recognition import evidence as ev
+from invoice_recognition.recognition import fallback as fb
 from invoice_recognition.recognition import issue_values as iv
 from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition import quality as ql
@@ -272,11 +282,17 @@ class Gate:
     short, because of it. From then on the deadline counts as passed whatever the clock
     says: an event loop's timer can fire before its time (asyncio up to one tick of the
     clock, 1 ms in Docker Desktop's Linux; uvloop up to about 2 ms), and the reading must
-    not go on in that gap."""
+    not go on in that gap.
+
+    down: the models whose provider failed a request of this document (_ask): its later
+    requests for them go to the backup model, but for the inputs the backup may not read
+    (a quality warning), which stay with the model. Of this document only - nothing about
+    one document's providers is carried to another."""
 
     slots: asyncio.Semaphore | None = None
     deadline: float | None = None
     hit: bool = False
+    down: set[str] = field(default_factory=set)
 
     def remaining(self) -> float | None:
         return None if self.deadline is None else self.deadline - time.monotonic()
@@ -406,6 +422,118 @@ async def _call(
     return res, cut
 
 
+@dataclass(frozen=True)
+class Backup:
+    """Where a first reader's request goes when the provider of its model fails
+    (Config.fallback_model and the settings next to it)."""
+
+    model: str
+    max_tokens: int
+    timeout_s: float
+
+    @classmethod
+    def of(cls, cfg: Config) -> Backup | None:
+        if cfg.fallback_model is None:
+            return None
+        return cls(cfg.fallback_model, cfg.fallback_max_tokens, cfg.fallback_timeout_s)
+
+
+@dataclass
+class Sent:
+    """One request _ask sent, as it ended."""
+
+    res: LLMResult
+    cut: bool  # cut short by the document's deadline, as _call told it
+    backup: bool  # sent to the backup model
+
+
+async def _ask(
+    client: httpx.AsyncClient,
+    model: str,
+    prompt: str,
+    part: ContentPart | None,
+    max_tokens: int,
+    timeout_s: float,
+    *,
+    gate: Gate,
+    own: asyncio.Semaphore | None = None,
+    backup: Backup | None = None,
+    gated: bool = False,
+) -> list[Sent]:
+    """One request of a first reader and, when the provider of its model failed
+    (fallback.provider_failed), the same request once more to the backup model: the same
+    prompt and part, the backup's own token limit and timeout, the plugins a model of
+    another provider needs for a PDF. Returns each request sent, in order: one or two.
+    Raises DeadlinePassed only when nothing was sent.
+
+    backup None, or the request's own model: one request, exactly as _call sends it.
+
+    gated: an input the backup may not read (a page of a scan or a photo with a quality
+    warning). It always goes to its own model, even one that is down; a failure of that
+    model's provider still marks the model down for the rest of the document.
+
+    Who is asked first: the backup alone when the model is down for the document
+    (Gate.down) and the backup may read the input; otherwise the request's own model.
+    Then the fallback step: when the provider of the own model failed, the model is down
+    from now on and - unless the input is gated - the backup is asked once. A request cut
+    by the deadline (as _call tells it, never the clock) is not the provider's failure: it
+    is never sent again and marks nothing down. The backup's own outcome never sends
+    anything more; a backup request is bounded by the deadline like any other."""
+    if backup is None or backup.model == model:
+        res, cut = await _call(
+            client, model, prompt, part, max_tokens, timeout_s, gate=gate, own=own
+        )
+        return [Sent(res, cut, False)]
+    if model in gate.down and not gated:
+        return [await _to_backup(client, backup, prompt, part, gate, own)]
+    res, cut = await _call(client, model, prompt, part, max_tokens, timeout_s, gate=gate, own=own)
+    first = Sent(res, cut, False)
+    if cut or not fb.provider_failed(res):
+        return [first]
+    if model not in gate.down:
+        gate.down.add(model)
+        logger.warning(
+            "%s failed at its provider (%s); the document's next requests to it go to %s",
+            model,
+            res.error or f"finish={res.finish_reason}",
+            backup.model,
+        )
+    if gated:
+        return [first]
+    try:
+        # No await between the end of the first request and this one (_to_backup awaits
+        # nothing before its _call): it asks for its slot as an ordinary request before
+        # any optional request can look (_optional_slot).
+        return [first, await _to_backup(client, backup, prompt, part, gate, own)]
+    except DeadlinePassed:
+        return [first]
+
+
+async def _to_backup(
+    client: httpx.AsyncClient,
+    backup: Backup,
+    prompt: str,
+    part: ContentPart | None,
+    gate: Gate,
+    own: asyncio.Semaphore | None,
+) -> Sent:
+    """The request once to the backup model; raises DeadlinePassed when it cannot be sent
+    before the deadline."""
+    res, cut = await _call(
+        client,
+        backup.model,
+        prompt,
+        part,
+        backup.max_tokens,
+        backup.timeout_s,
+        gate=gate,
+        own=own,
+        plugins=_other_model_extra(part),
+    )
+    logger.info("asked %s in place of the model that is down", backup.model)
+    return Sent(res, cut, True)
+
+
 def _attempt(res: LLMResult, lines: int, issues: int) -> Attempt:
     return Attempt(
         res.model,
@@ -420,6 +548,68 @@ def _attempt(res: LLMResult, lines: int, issues: int) -> Attempt:
     )
 
 
+def _candidate(
+    res: LLMResult, page: int, carry: bool, evidence: ev.Evidence | None, by_backup: bool
+) -> tuple[PageResult, Attempt, tuple[bool, int, int], int | None]:
+    """One answer to a page as a candidate of read_page: the page as read from it, its
+    attempt, its key for the choice between attempts (lower is better), and its number of
+    lines when it was read cleanly (None: failed)."""
+    parsed = parse_json(res.text)
+    rows = (parsed or {}).get("rows")
+    tail = ""
+    if rows is None:  # broken or cut-off answer: keep whatever complete rows it has
+        rows = salvage_lines(res.text)
+    elif carry and parsed is not None and isinstance(parsed.get("carry_in"), str):
+        # Not taken from a salvaged answer; anything but a string is no tail.
+        tail = co.carry_text(parsed["carry_in"])
+    rows = rows if isinstance(rows, list) else []
+    lines, totals = rows_to_page(rows, page)
+    fixed = repair(lines)
+    issues = check_page(lines, totals, page, evidence)
+    failed = bool(res.error) or parsed is None
+    if failed:
+        why = res.error or f"answer is not valid JSON (finish={res.finish_reason})"
+        issues.append(Issue("page_read", why, page=page, form="failed"))
+    else:
+        # Without a text layer nothing else notices a page that came back empty
+        # (with one, check_coverage does). A page with only control totals is not empty.
+        if not lines and not totals and evidence is None:
+            issues.append(
+                Issue(
+                    "page_empty",
+                    "the answer has no line items and no control totals",
+                    page=page,
+                )
+            )
+    dropped = len(rows) - len(lines) - len(totals)
+    if dropped:
+        issues.append(
+            Issue(
+                "rows_dropped",
+                f"{dropped} row(s) of the answer have neither sku nor amount and were left out",
+                page=page,
+                values=iv.RowsDropped(dropped),
+            )
+        )
+    attempt = _attempt(res, len(lines), len(issues))
+    # The model that answered, not the one the slot names: a page read by the backup must
+    # not pass for a reading by the first model (compare_second).
+    # Read by the backup only when its answer did not fail: a failed backup answer read
+    # nothing, even when it is the attempt kept.
+    cand = PageResult(
+        page,
+        lines,
+        totals,
+        issues,
+        [],
+        fixed,
+        carry_in=tail,
+        model=res.model,
+        by_backup=by_backup and not failed,
+    )
+    return cand, attempt, (failed, len(issues), -len(lines)), None if failed else len(lines)
+
+
 async def read_page(
     client: httpx.AsyncClient,
     part: ContentPart,
@@ -431,10 +621,16 @@ async def read_page(
     carry: bool = False,
     *,
     gate: Gate | None = None,
+    backup: Backup | None = None,
+    gated: bool = False,
 ) -> PageResult:
     """Read one page, once per entry of cfg.page_models until an attempt passes its
     checks, and keep the best attempt. sem: the document's limit on page requests in
     flight; gate: the shared one and the deadline (None: neither).
+
+    backup: the model an entry's request goes to as well when the provider of its own
+    model fails (_ask; None: none); its answer is one more attempt, chosen between as any
+    other. gated: the page may not go to the backup (a quality warning).
 
     At the deadline the attempts stop. A page with no attempt that ran to its end (none
     was sent, or every one was cut short) gets a "page_read" issue that says so and
@@ -456,7 +652,7 @@ async def read_page(
     stopped = completed = False
     for model in cfg.page_models:
         try:
-            res, cut = await _call(
+            sent = await _ask(
                 client,
                 model,
                 prompt,
@@ -465,57 +661,24 @@ async def read_page(
                 cfg.page_timeout_s,
                 gate=gate,
                 own=sem,
+                backup=backup,
+                gated=gated,
             )
         except DeadlinePassed:
             stopped = True
             break  # no stronger-model note: the page was stopped by the deadline
-        completed = completed or not cut
-        parsed = parse_json(res.text)
-        rows = (parsed or {}).get("rows")
-        tail = ""
-        if rows is None:  # broken or cut-off answer: keep whatever complete rows it has
-            rows = salvage_lines(res.text)
-        elif carry and parsed is not None and isinstance(parsed.get("carry_in"), str):
-            # Not taken from a salvaged answer; anything but a string is no tail.
-            tail = co.carry_text(parsed["carry_in"])
-        rows = rows if isinstance(rows, list) else []
-        lines, totals = rows_to_page(rows, page)
-        fixed = repair(lines)
-        issues = check_page(lines, totals, page, evidence)
-        failed = bool(res.error) or parsed is None
-        if failed:
-            why = res.error or f"answer is not valid JSON (finish={res.finish_reason})"
-            issues.append(Issue("page_read", why, page=page, form="failed"))
-        else:
-            counts.append(len(lines))
-            # Without a text layer nothing else notices a page that came back empty
-            # (with one, check_coverage does). A page with only control totals is not empty.
-            if not lines and not totals and evidence is None:
-                issues.append(
-                    Issue(
-                        "page_empty",
-                        "the answer has no line items and no control totals",
-                        page=page,
-                    )
-                )
-        dropped = len(rows) - len(lines) - len(totals)
-        if dropped:
-            issues.append(
-                Issue(
-                    "rows_dropped",
-                    f"{dropped} row(s) of the answer have neither sku nor amount and were left out",
-                    page=page,
-                    values=iv.RowsDropped(dropped),
-                )
-            )
-        attempts.append(_attempt(res, len(lines), len(issues)))
-        cand = PageResult(page, lines, totals, issues, [], fixed, carry_in=tail, model=model)
-        # A clean read beats a failed one, then fewer issues, then more lines; on a tie the
-        # earlier attempt stays. Counting issues alone let an emptier answer win.
-        key = (failed, len(issues), -len(lines))
-        if best is None or key < best_key:
-            best, best_key = cand, key
-        if not best.issues or cut:  # cut: the deadline passed, no attempt can follow
+        for req in sent:
+            cand, attempt, key, count = _candidate(req.res, page, carry, evidence, req.backup)
+            attempts.append(attempt)
+            completed = completed or not req.cut
+            if count is not None:
+                counts.append(count)
+            # A clean read beats a failed one, then fewer issues, then more lines; on a tie
+            # the earlier attempt stays. Counting issues alone let an emptier answer win.
+            if best is None or key < best_key:
+                best, best_key = cand, key
+        # cut: the deadline passed, no attempt can follow
+        if best is not None and (not best.issues or any(req.cut for req in sent)):
             break
     else:
         # Every attempt was made and the best one still fails its checks: this is where a
@@ -550,10 +713,11 @@ async def read_page(
     return best
 
 
-def _other_model_extra(part: ContentPart) -> list[JSONObject] | None:
+def _other_model_extra(part: ContentPart | None) -> list[JSONObject] | None:
     """The plugins of a request to a model of another provider: a PDF must reach it as the
-    file, not as the text of OpenRouter's OCR of it. None for an image."""
-    return PDF_NATIVE if part.get("type") == "file" else None
+    file, not as the text of OpenRouter's OCR of it. None for an image and for a request
+    without a file."""
+    return PDF_NATIVE if part is not None and part.get("type") == "file" else None
 
 
 async def read_second(
@@ -735,6 +899,23 @@ def deadline_unread_text(page: int, lines: int) -> str:
         f"Page {page} was not read to the end: the time limit for the document passed. "
         f"The {lines} {items} read before that may be incomplete."
     )
+
+
+def fallback_note(model: str, pages: list[int]) -> JSONObject:
+    """The one note for the readings the result keeps from the backup model, read because
+    the provider of the first model failed. pages: those whose line items it read."""
+    which = f"page {pages[0]}" if len(pages) == 1 else f"pages {page_ranges(pages)}"
+    return {
+        "page": None,
+        "kind": "fallback_model",
+        "text": f"The usual reading model was not available, so a backup model, {model}, read "
+        f"{which}. What it read went through the same checks.",
+        "source": "fallback",
+        "model": model,
+        "pages": pages,
+        "header": False,
+        "layout": False,
+    }
 
 
 def stronger_model_note(pr: PageResult) -> JSONObject:
@@ -1671,9 +1852,12 @@ async def _read(
     # goes to a person, and the second reader was never measured on such pages.
     second_pages: list[int] = []
     second_model = cfg.second_reading_model
+    doubtful = set(scan_issues) - set(skipped)  # pages of a scan read with a quality warning
     if second_model is not None and prep.is_pdf and evidence is None:
-        doubtful = set(scan_issues) - set(skipped)
         second_pages = [p for p in range(1, n + 1) if p not in skipped and p not in doubtful]
+    # The backup model reads what the second reader would: no page with a quality warning
+    # (gated, see one() below); a photo not at all.
+    backup = Backup.of(cfg) if prep.is_pdf else None
     # Second readings have a limit of their own, so a retry of the first reader never
     # waits behind them for the document's; they yield every shared slot to the first
     # readers (Gate.enter). They share the deadline, but not its verdict.
@@ -1697,7 +1881,19 @@ async def _read(
         else:
             try:
                 ask = carry if with_carry is None else with_carry
-                r = await read_page(client, parts[p - 1], p, n, evidence, cfg, sem, ask, gate=gate)
+                r = await read_page(
+                    client,
+                    parts[p - 1],
+                    p,
+                    n,
+                    evidence,
+                    cfg,
+                    sem,
+                    ask,
+                    gate=gate,
+                    backup=backup,
+                    gated=p in doubtful,
+                )
             except Exception as e:  # fault boundary: whatever breaks while reading one page
                 logger.warning("page %d could not be read", p, exc_info=True)
                 issue = Issue("page_read", f"{type(e).__name__}: {e}", page=p, form="failed")
@@ -1876,6 +2072,9 @@ async def _read(
     second_issues, missing = compare_second(pages, second_pages, seconds, second_model)
     if missing is not None:
         notes.append(missing)
+    by_backup = [p.page for p in pages if p.method == "model" and p.by_backup]
+    if backup is not None and by_backup:
+        notes.append(fallback_note(backup.model, by_backup))
 
     lines: list[Line] = []
     checkpoints: list[Checkpoint] = []

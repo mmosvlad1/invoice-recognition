@@ -46,6 +46,12 @@ from decimal import Decimal
 
 from invoice_recognition.recognition import checks
 from invoice_recognition.recognition.checks import Issue
+from invoice_recognition.recognition.issue_values import (
+    Difference,
+    SecondColumn,
+    SecondPage,
+    SecondRow,
+)
 from invoice_recognition.shapes import Line
 
 FIELDS = ("sku", "quantity", "unit_price", "tax_rate", "amount")
@@ -250,14 +256,17 @@ def _and(items: list[str]) -> str:
     return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
-def _difference(field: str, first: object, second: object) -> str:
-    label = _LABELS[field]
-    theirs, ours = _shown(field, second), _shown(field, first)
-    if theirs is None:
-        return f"no {label} where the result has {ours}"
-    if ours is None:
-        return f"{label} {theirs} where the result has none"
-    return f"{label} {theirs} instead of {ours}"
+def _difference(field: str, first: object, second: object) -> Difference:
+    return Difference(field, _shown(field, second), _shown(field, first))
+
+
+def _said(d: Difference) -> str:
+    label = _LABELS[d.field]
+    if d.theirs is None:
+        return f"no {label} where the result has {d.ours}"
+    if d.ours is None:
+        return f"{label} {d.theirs} where the result has none"
+    return f"{label} {d.theirs} instead of {d.ours}"
 
 
 def _where(first: Line, index: int) -> tuple[str, int | None]:
@@ -271,7 +280,8 @@ def _where(first: Line, index: int) -> tuple[str, int | None]:
 def _row_issue(first: Line, second: Line, index: int, page: int, differ: list[str]) -> Issue:
     where, line_no = _where(first, index)
     place = f"{where.capitalize()} on page {page}"
-    found = _and([_difference(f, first.get(f), second.get(f)) for f in differ])
+    differences = tuple(_difference(f, first.get(f), second.get(f)) for f in differ)
+    found = _and([_said(d) for d in differences])
     values = {f"line.{f}": _suggested(f, second.get(f)) for f in differ}
     # Only values the second reader did read can be written into a cell.
     suggested = {k: v for k, v in values.items() if v is not None}
@@ -285,6 +295,7 @@ def _row_issue(first: Line, second: Line, index: int, page: int, differ: list[st
         line_no=line_no,
         fields=[f"line.{f}" for f in differ],
         suggestions=[{"set": suggested, "source": "second_reading"}] if suggested else [],
+        values=SecondRow(index + 1, differences),
     )
 
 
@@ -293,18 +304,19 @@ def _column_issue(
 ) -> Issue:
     """rows: (first, second, index in the first reading) of every row that differs."""
     first, second, index = rows[0]
-    where, _ = _where(first, index)
+    where, line_no = _where(first, index)
     label = _LABELS[field]
     example = _difference(field, first.get(field), second.get(field))
     return Issue(
         "second_reading",
         f"On page {page} a second reading by another model gives a different {label} on "
-        f"{len(rows)} of {compared} line items, for example at {where}: {example}. The two "
-        f"readings write this column differently, or one of them misread it; please check "
+        f"{len(rows)} of {compared} line items, for example at {where}: {_said(example)}. The "
+        f"two readings write this column differently, or one of them misread it; please check "
         f"the {label} column on this page.",
         page=page,
         severity="warning",
         fields=[f"line.{field}"],
+        values=SecondColumn(len(rows), compared, index + 1, line_no, example),
     )
 
 
@@ -324,6 +336,8 @@ def _page_issue(first: list[Line], second: list[Line], found: Alignment, page: i
             f"the result has {len(first)}."
         )
     text = [counts]
+    extra: list[int] = []  # position numbers only the second reading has
+    absent: list[int] = []  # position numbers only the result has
     if found.by == "none":
         text.append("The lines could not be matched one to one, so they were not compared.")
     else:
@@ -341,7 +355,13 @@ def _page_issue(first: list[Line], second: list[Line], found: Alignment, page: i
                 f"{were} not found by the second reading."
             )
     text.append("Please check this page.")
-    return Issue("second_reading", " ".join(text), page=page, severity="warning")
+    return Issue(
+        "second_reading",
+        " ".join(text),
+        page=page,
+        severity="warning",
+        values=SecondPage(len(second), len(first), found.by != "none", tuple(extra), tuple(absent)),
+    )
 
 
 def compare_page(first: list[Line], second: list[Line], page: int) -> list[Issue]:

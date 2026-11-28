@@ -503,7 +503,10 @@ def test_each_decision_is_logged(caplog: pytest.LogCaptureFixture) -> None:
         review.decide(job, 0, KEEP, T1)
         review.undo(job, 0)
         review.undo(job, 0)  # nothing to take back
-    assert [r.getMessage() for r in caplog.records] == [
+    # Only the review's own records: the sample's hand-built issues have no values, and
+    # their wording logs that they keep the flow's text.
+    decisions = [r for r in caplog.records if r.name == "invoice_recognition.api.review"]
+    assert [r.getMessage() for r in decisions] == [
         f"decision on job {job.id} issue 0: accept 2",
         f"decision on job {job.id} issue 0: keep",
         f"decision on job {job.id} issue 0: undone",

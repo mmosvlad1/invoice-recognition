@@ -13,10 +13,10 @@ from invoice_recognition.recognition.checks import Issue, ranges
 from invoice_recognition.recognition.issue_values import (
     AttemptCounts,
     ControlTotalOff,
+    Coverage,
     CutByDeadline,
     DeadlineStop,
     Difference,
-    DocumentCoverage,
     FrameSide,
     Glare,
     HeaderNotPrinted,
@@ -25,7 +25,6 @@ from invoice_recognition.recognition.issue_values import (
     LineProduct,
     Measured,
     MissingNumbers,
-    PageCoverage,
     RateUnreadable,
     RepeatedNumbers,
     RowsCompared,
@@ -439,17 +438,17 @@ def _line_items(printed: int, read: int) -> str:
     return f"seems to have {printed} {items}, but {read} {_plural(read, 'was', 'were')} read"
 
 
-def _page_coverage(issue: Issue, v: PageCoverage) -> str:
+def _coverage(issue: Issue, v: Coverage) -> str:
+    # A page's checks give their issue the page even when they counted its rows as a whole
+    # document's (no line read carried a page): the count is the page's.
+    if issue.page is None:
+        return (
+            f"The document {_line_items(v.printed, v.read)}. A line may be missing or read "
+            "twice: check the line items."
+        )
     return (
-        f"{_page(issue).capitalize()} {_line_items(v.printed, v.read)}. A line may be missing "
-        "or read twice: check the page."
-    )
-
-
-def _document_coverage(v: DocumentCoverage) -> str:
-    return (
-        f"The document {_line_items(v.printed, v.read)}. A line may be missing or read "
-        "twice: check the line items."
+        f"Page {issue.page} {_line_items(v.printed, v.read)}. A line may be missing or read "
+        "twice: check the page."
     )
 
 
@@ -817,10 +816,8 @@ def _worded(issue: Issue, line: Line | None) -> str:
             return _control_total_off(values)
         case HeaderNotPrinted():
             return _header_not_printed(issue, values)
-        case PageCoverage():
-            return _page_coverage(issue, values)
-        case DocumentCoverage():
-            return _document_coverage(values)
+        case Coverage():
+            return _coverage(issue, values)
         case CutByDeadline():
             return _cut_by_deadline(issue, values)
         case RowsDropped():

@@ -140,17 +140,9 @@ class HeaderNotPrinted:
 
 
 @dataclass(frozen=True, slots=True)
-class PageCoverage:
-    """Rows that look like line items printed on the issue's page, and the lines read."""
-
-    codes: ClassVar[frozenset[str]] = frozenset({"coverage"})
-    printed: int
-    read: int
-
-
-@dataclass(frozen=True, slots=True)
-class DocumentCoverage:
-    """Rows that look like line items printed in the document, and the lines read."""
+class Coverage:
+    """Rows that look like line items printed, and the lines read: on the issue's page, or
+    in the whole document when the issue has no page."""
 
     codes: ClassVar[frozenset[str]] = frozenset({"coverage"})
     printed: int
@@ -330,8 +322,7 @@ type IssueValues = (
     | MissingNumbers
     | ControlTotalOff
     | HeaderNotPrinted
-    | PageCoverage
-    | DocumentCoverage
+    | Coverage
     | CutByDeadline
     | RowsDropped
     | AttemptCounts

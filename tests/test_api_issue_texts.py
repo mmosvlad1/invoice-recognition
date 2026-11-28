@@ -489,8 +489,8 @@ def test_a_page_of_a_pdf_whose_reading_has_no_lines() -> None:
     [issue] = pl.check_page([], [], 2, ev.build([PAGE, PAGE], "text_layer"))
     assert issue.page == 2
     assert text(issue) == (
-        "The document seems to have 2 line items, but 0 were read. A line may be missing or "
-        "read twice: check the line items."
+        "Page 2 seems to have 2 line items, but 0 were read. A line may be missing or read "
+        "twice: check the page."
     )
 
 

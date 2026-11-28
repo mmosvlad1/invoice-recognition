@@ -26,13 +26,12 @@ from typing import Any, cast
 from invoice_recognition.recognition.evidence import CENT, Evidence, money, printed_forms
 from invoice_recognition.recognition.issue_values import (
     ControlTotalOff,
-    DocumentCoverage,
+    Coverage,
     HeaderNotPrinted,
     IssueForm,
     IssueValues,
     LineProduct,
     MissingNumbers,
-    PageCoverage,
     RateUnreadable,
     RepeatedNumbers,
     SubtotalOff,
@@ -732,7 +731,7 @@ def check_coverage(doc: Doc, evidence: Evidence) -> list[Issue]:
                         "coverage",
                         f"page {p.number}: {want} item rows printed, {read} extracted",
                         page=p.number,
-                        values=PageCoverage(want, read),
+                        values=Coverage(want, read),
                     )
                 )
     else:
@@ -742,7 +741,7 @@ def check_coverage(doc: Doc, evidence: Evidence) -> list[Issue]:
                 Issue(
                     "coverage",
                     f"{want} item rows printed, {len(lines)} extracted",
-                    values=DocumentCoverage(want, len(lines)),
+                    values=Coverage(want, len(lines)),
                 )
             )
     return out

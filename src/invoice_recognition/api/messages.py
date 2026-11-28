@@ -26,6 +26,7 @@ from invoice_recognition.recognition.issue_values import (
     Measured,
     MissingNumbers,
     PageCoverage,
+    RateUnreadable,
     RepeatedNumbers,
     RowsCompared,
     RowsDropped,
@@ -353,6 +354,13 @@ def _tax_total_off(v: TaxTotalOff) -> str:
     return (
         f"The tax worked out from the lines is {v.computed}, but the invoice's tax "
         f"total is {v.printed}. Check the tax rates of the lines and the tax total."
+    )
+
+
+def _rate_unreadable(v: RateUnreadable) -> str:
+    return (
+        "The invoice's tax summary has a row whose rate could not be read as a number (base "
+        f"{v.printed}). Check the tax rates in the summary."
     )
 
 
@@ -793,6 +801,8 @@ def _worded(issue: Issue, line: Line | None) -> str:
             return _tax_rate_off(values)
         case TaxTotalOff():
             return _tax_total_off(values)
+        case RateUnreadable():
+            return _rate_unreadable(values)
         case RepeatedNumbers():
             return _repeated(values)
         case MissingNumbers():

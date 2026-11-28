@@ -33,6 +33,7 @@ from invoice_recognition.recognition.issue_values import (
     LineProduct,
     MissingNumbers,
     PageCoverage,
+    RateUnreadable,
     RepeatedNumbers,
     SubtotalOff,
     TaxNoRow,
@@ -370,10 +371,10 @@ def _tax(doc: Doc) -> dict[object, Issue]:
                     "tax",
                     f"lines at {rate}% add up to {base_lines}, invoice says {base_printed}",
                     fields=["line.tax_rate", "line.amount", "header.tax_breakdown"],
-                    # A printed rate that is not a number has no sentence (yet): the person
-                    # reads this message.
                     values=(
-                        TaxRateOff(rate, base_lines, base_printed) if rate is not None else None
+                        TaxRateOff(rate, base_lines, base_printed)
+                        if rate is not None
+                        else RateUnreadable(base_printed)
                     ),
                 )
     else:

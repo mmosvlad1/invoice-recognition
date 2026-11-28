@@ -160,14 +160,6 @@ def text(issue: Issue, line: Line | None = None) -> str:
     return worded
 
 
-def leaked(issue: Issue) -> str:
-    """The text of an issue whose message no wording recognises: the person reads the
-    flow's own words. Each use is a known gap, named where it is used."""
-    worded = messages.issue_text(issue)
-    assert worded == issue.message
-    return worded
-
-
 def doc(lines: list[Line], **header: object) -> Doc:
     return {"header": header, "lines": lines, "checkpoints": []}
 
@@ -261,8 +253,11 @@ def test_tax() -> None:
 def test_a_tax_row_whose_rate_is_not_a_number() -> None:
     breakdown = [{"rate": 20, "base": 20.0, "tax": 4.0}, {"rate": "n/a", "base": 12.5}]
     [issue] = checks.check_tax(doc([line(1)], tax_breakdown=breakdown))
-    # A known gap: no wording for it, so the person reads the flow's own words.
-    assert leaked(issue) == "lines at None% add up to 0, invoice says 12.5"
+    assert issue.message == "lines at None% add up to 0, invoice says 12.5"
+    assert text(issue) == (
+        "The invoice's tax summary has a row whose rate could not be read as a number (base "
+        "12.5). Check the tax rates in the summary."
+    )
 
 
 def test_numbering() -> None:

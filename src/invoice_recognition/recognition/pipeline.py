@@ -397,7 +397,7 @@ async def _call(
         )
     except Exception as e:  # fault boundary: one request
         logger.warning("request to %s failed", model, exc_info=True)
-        return LLMResult(model=model, error=f"{type(e).__name__}: {e}"), False
+        return LLMResult(model=model, error=f"{type(e).__name__}: {e}", failure="exception"), False
     finally:
         gate.leave(own, optional)
     cut = bounded and res.timed_out

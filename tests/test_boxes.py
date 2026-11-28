@@ -20,16 +20,15 @@ from invoice_recognition.recognition import layout as lay
 from invoice_recognition.recognition.boxes import PageFrame
 from invoice_recognition.shapes import JSONObject, Line
 
-from boxes_help import CROP, SHIFT, VARIANTS, Oracle, layout_of, variant
+from boxes_help import CROP, SHIFT, VARIANTS, Oracle, layout_of, sample, sample_text_lines, variant
 from drawn import scan
 from fakes import make_pdf
-from samples import FIXTURES, INVOICES, TEXT_LAYER, WITH_LAYOUT, saved_layout, truth_doc
+from samples import FIXTURES, TEXT_LAYER, WITH_LAYOUT, saved_layout, truth_doc
 
 
-@functools.cache
 def pdf(name: str, kind: str = "orig") -> bytes:
     """A sample invoice displayed as `kind` (boxes_help.variant), built once per run."""
-    return variant((INVOICES / f"{name}.pdf").read_bytes(), kind)
+    return sample(name, kind)
 
 
 # --------------------------------------------------------------------------- #
@@ -241,6 +240,10 @@ def _inside(inner: boxes.Rect, outer: boxes.Rect) -> bool:
     )
 
 
+# pdfium reads the text under each rectangle on the same displayed page the lines were read
+# from, so a wrong line is framed as its own wrong text: on rot90 this passed with 384
+# descriptions of xl_grouped wrong (before evidence.upright_textpage). The rectangles of a
+# page shown turned are pinned against geometry in test_rotated_pages.
 @pytest.mark.parametrize("name", WITH_LAYOUT)
 @pytest.mark.parametrize("kind", LAYOUT_VARIANTS)
 def test_every_cell_found_by_code_frames_its_own_text(name: str, kind: str) -> None:
@@ -416,9 +419,8 @@ def model_boxes(name: str, kind: str, lines: list[Line]) -> list[boxes.LineBoxes
     return boxes.locate(lines, text_pages(name, kind), frames_of(name, kind))
 
 
-@functools.cache
 def text_pages(name: str, kind: str) -> list[list[lay.TextLine]]:
-    return lay.text_lines(pdf(name, kind))
+    return sample_text_lines(name, kind)
 
 
 @functools.cache

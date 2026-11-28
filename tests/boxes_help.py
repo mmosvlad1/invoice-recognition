@@ -8,17 +8,20 @@ lands on whole device units. pdfium then says which text lies under it.
 """
 
 import ctypes
+import functools
 import io
 from types import TracebackType
 from typing import Self
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
-from pypdf import PdfWriter, Transformation
+from pypdf import PageObject, PdfWriter, Transformation
 from pypdf.generic import RectangleObject
 
 from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.recognition import layout as lay
+
+from samples import INVOICES
 
 type Rect = tuple[float, float, float, float]
 
@@ -123,6 +126,7 @@ def text_under(data: bytes, page_no: int, rect: Rect) -> str:
 # --------------------------------------------------------------------------- #
 
 VARIANTS = ("orig", "rot90", "rot180", "rot270", "shift", "crop", "landscape")
+TURNED = ("turned90", "turned180", "turned270")
 SHIFT = (100.0, 200.0)
 CROP = (30.0, 300.0, 60.0, 100.0)  # cut from the left, bottom, right and top
 
@@ -139,12 +143,14 @@ def variant(data: bytes, kind: str) -> bytes:
     landscape - the content turned a quarter counter-clockwise onto a landscape media box,
                 and /Rotate 90 to show it upright again: on the displayed page it looks
                 like orig, in user space every word of a row has the same X;
+    turned90, turned180, turned270 - the content turned counter-clockwise by that many
+                degrees onto a media box turned with it, no /Rotate: the page is shown
+                turned, its text written along +y, -x or -y of user space;
     crop_off  - a crop box that misses the media box: the displayed page has no area.
     """
     w = PdfWriter(clone_from=io.BytesIO(data))
     for page in w.pages:
         left, bottom, right, top = (float(v) for v in page.mediabox)
-        width, height = right - left, top - bottom
         match kind:
             case "orig":
                 pass
@@ -159,10 +165,10 @@ def variant(data: bytes, kind: str) -> bytes:
                 cl, cb, cr, ct = CROP
                 page.cropbox = RectangleObject([left + cl, bottom + cb, right - cr, top - ct])
             case "landscape":
-                turn = Transformation().translate(-left, -bottom).rotate(90).translate(height, 0)
-                page.add_transformation(turn)
-                page.mediabox = page.cropbox = RectangleObject([0, 0, height, width])
+                _turn(page, 90)
                 page.rotation = 90
+            case "turned90" | "turned180" | "turned270":
+                _turn(page, int(kind[6:]))
             case "crop_off":
                 page.cropbox = RectangleObject([right + 10, top + 10, right + 50, top + 50])
             case _:
@@ -170,6 +176,32 @@ def variant(data: bytes, kind: str) -> bytes:
     buf = io.BytesIO()
     w.write(buf)
     return buf.getvalue()
+
+
+@functools.cache
+def sample(name: str, kind: str = "orig") -> bytes:
+    """A sample invoice displayed as `kind` (variant), built once per run."""
+    return variant((INVOICES / f"{name}.pdf").read_bytes(), kind)
+
+
+@functools.cache
+def sample_text_lines(name: str, kind: str = "orig") -> list[list[lay.TextLine]]:
+    """layout.text_lines of sample(name, kind), read once per run and shared by the tests
+    that use it: not to be changed."""
+    return lay.text_lines(sample(name, kind))
+
+
+def _turn(page: PageObject, degrees: int) -> None:
+    """The content of the page turned counter-clockwise by 90, 180 or 270 degrees onto a
+    media box (and crop box) turned with it, its corner at the origin."""
+    left, bottom, right, top = (float(v) for v in page.mediabox)
+    width, height = right - left, top - bottom
+    move = {90: (height, 0.0), 180: (width, height), 270: (0.0, width)}[degrees]
+    page.add_transformation(
+        Transformation().translate(-left, -bottom).rotate(degrees).translate(*move)
+    )
+    box = [0, 0, width, height] if degrees == 180 else [0, 0, height, width]
+    page.mediabox = page.cropbox = RectangleObject(box)
 
 
 # --------------------------------------------------------------------------- #

@@ -10,7 +10,8 @@ Division of labour:
 Nothing in this module knows a particular invoice: column labels, markers of
 carry-forward / subtotal rows and the number format all come from the model's
 answer. What the parser assumes about tables in general:
-  - a table row is one text line of the PDF text layer (pdfium line breaks);
+  - a table row is one text line of the PDF text layer (pdfium line breaks, with the
+    page turned so that its text reads upright: evidence.upright_textpage);
   - the column headings sit on one text line and each heading overlaps its
     column horizontally;
   - every column is left- or right-aligned, at the same X on every page of the
@@ -34,6 +35,7 @@ import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
 
 from invoice_recognition.recognition import checks
+from invoice_recognition.recognition import evidence as ev
 from invoice_recognition.shapes import Checkpoint, JSONObject, Line
 
 FIELDS = ("line_no", "sku", "description", "quantity", "unit", "unit_price", "tax_rate", "amount")
@@ -94,12 +96,14 @@ def text_lines(data: bytes) -> list[list[TextLine]]:
     and top Y: the union of the boxes of its characters (_char_box).
 
     Lines are the same as in `evidence.pdf_text_layer` (pdfium's own line
-    breaks), so row counts are comparable with the evidence module."""
+    breaks, with the page turned so that its text reads upright:
+    evidence.upright_textpage), so row counts are comparable with the evidence module.
+    The coordinates are user space whatever the turn."""
     pdf = pdfium.PdfDocument(data)
     out: list[list[TextLine]] = []
     try:
         for pno, page in enumerate(pdf, start=1):
-            tp = page.get_textpage()
+            tp = ev.upright_textpage(page)
             rows: list[list[Word]] = [[]]
             cur: Word | None = None
             for i in range(tp.count_chars()):
